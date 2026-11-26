@@ -51,7 +51,7 @@ def capture(port: int, screenshot: Path) -> None:
                 }}},
             })
             path = f"/session/{session['sessionId']}"
-            webdriver(path + "/window/rect", {"width": 1440, "height": 1080})
+            webdriver(path + "/window/rect", {"width": 1440, "height": 1200})
             webdriver(path + "/url", {"url": f"http://127.0.0.1:{port}/"})
             script = """
                 const done = arguments[0];

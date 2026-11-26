@@ -119,10 +119,11 @@ function showTable() {
 function showStats() {
   const values = report.cards.map((card) => card.charges?.total_usd);
   const receipt = values.every(number) ? `$${values.reduce((sum, value) => sum + value, 0).toFixed(4)}` : 'Pending';
+  const chargeLabel = report.billing_status === 'settled' ? 'Vast charges' : 'Vast charges at report time';
   const cleaned = report.cards.filter((card) => card.cleanup === 'verified').length;
   const stats = [
     [`${(report.active_gpu_seconds / 60).toFixed(2)} min`, 'CUDA-timed work'],
-    [receipt, 'Vast charges'],
+    [receipt, chargeLabel],
     [`${cleaned} / ${report.cards.length}`, 'Rentals removed'],
   ];
   byId('stats').replaceChildren(...stats.map(([value, label]) => {
