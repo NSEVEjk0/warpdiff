@@ -20,5 +20,5 @@ def softmax(source: torch.Tensor, output: torch.Tensor) -> None:
     """Write a row-wise FP32 softmax into the supplied output tensor."""
     row_count, width = source.shape
     tile = triton.next_power_of_2(width)
-    rows = 1
+    rows = 4 if width <= 1024 else 1
     _softmax[(triton.cdiv(row_count, rows),)](source, output, row_count, width, tile, rows, num_warps=4)
