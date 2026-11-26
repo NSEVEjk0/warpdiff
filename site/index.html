@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111517">
+  <meta name="description" content="Compare the baseline and candidate of a Triton pull request on Vast.ai GPUs.">
+  <title>WarpDiff · GPU pull request checks</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="styles.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="frame nav">
+      <a class="brand" href="./" aria-label="WarpDiff home"><span class="brand-mark" aria-hidden="true"></span>WarpDiff</a>
+      <nav aria-label="Report navigation">
+        <a class="nav-method" href="#method">Method</a>
+        <a class="button quiet" id="evidence-link" href="report.json" download hidden>Download JSON <span aria-hidden="true">↓</span></a>
+        <button class="button" id="open-report" type="button">Open report <span aria-hidden="true">↗</span></button>
+        <input type="file" id="report-input" accept=".json,application/json" hidden>
+      </nav>
+    </div>
+  </header>
+
+  <main class="frame">
+    <section class="intro" aria-labelledby="intro-title">
+      <p class="eyebrow"><span class="signal" aria-hidden="true"></span> GPU PERFORMANCE CHECK</p>
+      <h1 id="intro-title">GPU performance,<br><span>before you merge.</span></h1>
+      <p class="intro-copy">Compare a Triton patch on the GPUs you ship to. WarpDiff measures both revisions on the same Vast.ai rental and turns the results into a GitHub check.</p>
+    </section>
+
+    <p id="load-status" class="notice" role="status">Loading the published benchmark…</p>
+    <section class="report" id="report" aria-labelledby="report-title" hidden>
+      <div class="run-header">
+        <div>
+          <p id="run-source" class="eyebrow"></p>
+          <h2 id="report-title">Softmax benchmark</h2>
+          <p class="revisions" id="revisions"></p>
+        </div>
+        <div class="run-actions">
+          <span class="pill" id="run-result"></span>
+          <a id="pr-link" class="button quiet" target="_blank" rel="noopener noreferrer" hidden>Pull request <span aria-hidden="true">↗</span></a>
+        </div>
+      </div>
+
+      <div class="report-controls">
+        <div class="shape-controls" id="shape-controls" aria-label="Input shape"></div>
+        <span class="threshold" id="threshold"></span>
+      </div>
+
+      <div class="gpu-grid" id="gpu-grid" aria-live="polite"></div>
+      <div class="stats" id="stats"></div>
+
+      <div class="all-shapes">
+        <h3>All measurements</h3>
+        <div class="table-wrap" tabindex="0" role="region" aria-label="Timing results table">
+          <table>
+            <thead><tr><th scope="col">GPU</th><th scope="col">Input</th><th scope="col">Baseline</th><th scope="col">Candidate</th><th scope="col">Change</th><th scope="col">Result</th></tr></thead>
+            <tbody id="results-table"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="method" id="method" aria-labelledby="method-title">
+      <div class="method-header">
+        <p class="eyebrow"><span class="signal" aria-hidden="true"></span> METHODOLOGY</p>
+        <h2 id="method-title">How the check works</h2>
+      </div>
+      <div class="method-grid">
+        <div><h3>Verify correctness</h3><p>Both revisions run against the same PyTorch reference on each GPU before timing begins.</p></div>
+        <div><h3>Time both revisions</h3><p>Randomized, paired CUDA graph timings measure the change on each device. An interval fully above the threshold fails the check.</p></div>
+        <div><h3>Close the rentals</h3><p>WarpDiff verifies that Vast removed the workers and updates the report when provider charges are available.</p></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="frame footer"><span>WarpDiff</span><a href="https://vast.ai/showcase" rel="noopener noreferrer" target="_blank">Built on Vast.ai <span aria-hidden="true">↗</span></a></footer>
+</body>
+</html>

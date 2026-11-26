@@ -103,7 +103,7 @@ class Vast:
             "image": IMAGE,
             "label": label,
             "disk": DISK_GB,
-            "runtype": "ssh_direct",
+            "runtype": "ssh_direc ssh_proxy",  # Vast CLI's direct mode, with proxy fallback.
             "target_state": "running",
             "cancel_unavail": True,
         })
