@@ -66,6 +66,50 @@ def worst_status(statuses) -> str:
     return "within-threshold"
 
 
+def report_status(cards: list[dict]) -> str:
+    if any(card["cleanup"] == "pending" for card in cards):
+        return "unavailable"
+    return worst_status(card["status"] for card in cards)
+
+
+def exit_code(status: str) -> int:
+    return {"regression": 2, "incorrect": 2, "unavailable": 3, "inconclusive": 3}.get(status, 0)
+
+
+def combine_reports(earlier: dict, current: dict) -> dict:
+    for report in (earlier, current):
+        if report.get("schema_version") != SCHEMA_VERSION or report.get("provenance") != "vast":
+            raise ValueError("Combining reports requires two live Vast benchmarks with the current schema")
+    if earlier["run_id"] == current["run_id"] or earlier.get("sources") or current.get("sources"):
+        raise ValueError("Choose two distinct original runs")
+    for key in ("head", "kernel", "margin_pct", "image", "repository", "pull_request"):
+        if earlier.get(key) != current.get(key):
+            raise ValueError(f"Both runs must benchmark the same {key}")
+    for report in (earlier, current):
+        if any(card.get("cleanup") == "pending" for card in report["cards"]):
+            raise ValueError("Resolve any pending rental cleanup before combining reports")
+
+    available = {}
+    for report in (earlier, current):
+        for card in report["cards"]:
+            if card.get("cases") and card.get("status") != "unavailable" and card.get("cleanup") == "verified":
+                available[card["requested_gpu"]] = {**card, "source_run_id": report["run_id"]}
+    if not {"RTX 4090", "A100"} <= available.keys():
+        raise ValueError("The combined report needs measured RTX 4090 and A100 results")
+    cards = [available["RTX 4090"], available["A100"]]
+    return {
+        **current,
+        "started_at": min(earlier["started_at"], current["started_at"]),
+        "cards": cards,
+        "status": report_status(cards),
+        "active_gpu_seconds": round(sum(card.get("active_gpu_seconds", 0) for card in cards), 3),
+        "sources": [
+            {key: report[key] for key in ("run_id", "base", "workflow_url")}
+            for report in (earlier, current)
+        ],
+    }
+
+
 def charges_for(rows: list[dict], instance_id: int) -> dict | None:
     matched = [row for row in rows if row.get("source") == f"instance-{instance_id}"]
     if not matched:
@@ -93,10 +137,14 @@ def write_json(path: Path, value: dict) -> None:
 
 
 def check_summary(report: dict, details_url: str | None = None) -> str:
+    baseline = f"Baseline `{report['base']['sha'][:12]}`"
+    if report.get("sources"):
+        commits = dict.fromkeys(source["base"]["sha"] for source in report["sources"])
+        baseline = "Baselines " + " / ".join(f"`{commit[:12]}`" for commit in commits)
     lines = [
         "### GPU performance on Vast.ai",
         "",
-        f"Baseline `{report['base']['sha'][:12]}` · candidate `{report['head']['sha'][:12]}` · "
+        f"{baseline} · candidate `{report['head']['sha'][:12]}` · "
         f"regression threshold **{report['margin_pct']}%**",
         "",
         "| GPU | Input | Baseline | Candidate | Change | Result |",
@@ -135,4 +183,7 @@ def check_summary(report: dict, details_url: str | None = None) -> str:
             lines.append(f"- {gpu}: {receipt}, cleanup {card['cleanup']}.")
     if details_url:
         lines.extend(["", f"[Full run and JSON evidence]({details_url})"])
+    for source in report.get("sources", []):
+        if source.get("workflow_url") and source["workflow_url"] != details_url:
+            lines.append(f"[Earlier benchmark]({source['workflow_url']})")
     return "\n".join(lines)

@@ -16,9 +16,19 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path, PurePosixPath
 
-from .report import SCHEMA_VERSION, charges_for, check_summary, evaluate_card, worst_status, write_json
+from .report import (
+    SCHEMA_VERSION,
+    charges_for,
+    check_summary,
+    combine_reports,
+    evaluate_card,
+    exit_code,
+    report_status,
+    write_json,
+)
 from .vast import APIError, IMAGE, Vast, api_key, ssh
 
 DEFAULT_GPUS = ("RTX 4090", "A100")
@@ -39,7 +49,7 @@ def revision(revision_name: str, kernel: str) -> tuple[dict, bytes]:
     if len(source) > 250_000:
         raise ValueError("Kernel module exceeds 250 KB")
     compile(source, kernel, "exec")
-    return {"sha": commit}, source
+    return {"sha": commit, "kernel_sha256": sha256(source).hexdigest()}, source
 
 
 def make_archive(baseline: bytes, candidate: bytes) -> bytes:
@@ -141,7 +151,7 @@ def run_card(vast: Vast, args, gpu: str, offers: list[dict], state: Path, run_id
             raise RuntimeError("No eligible offer within the requested price and host limits")
         record["creating"] = True
         write_json(state, record)
-        for offer in offers[:5]:
+        for offer in offers:
             if cancelled.is_set():
                 raise RuntimeError("Run cancelled")
             try:
@@ -149,8 +159,9 @@ def run_card(vast: Vast, args, gpu: str, offers: list[dict], state: Path, run_id
                 card["offer_hourly_usd"] = float(offer["dph_total"])
                 break
             except APIError as error:
-                if error.status not in {404, 409, 410}:
+                if error.status not in {404, 409, 410} and error.code != "no_such_ask":
                     raise
+                log(f"{gpu}: offer {offer['id']} was no longer rentable")
         if instance_id is None:
             raise RuntimeError("All selected offers disappeared before renting")
         record["instance_ids"].append(instance_id)
@@ -269,17 +280,37 @@ def compare(args) -> int:
         "finished_at": datetime.now(UTC).isoformat(timespec="seconds"), "base": base, "head": head,
         "image": IMAGE, "kernel": str(kernel), "margin_pct": args.margin, "repository": args.repository,
         "pull_request": args.pull_request, "workflow_url": args.workflow_url, "cards": cards,
-        "status": worst_status(card["status"] for card in cards),
+        "status": report_status(cards),
         "active_gpu_seconds": round(sum(card.get("active_gpu_seconds", 0) for card in cards), 3),
     }
-    if any(card["cleanup"] == "pending" for card in cards):
-        report["status"] = "unavailable"
     write_json(args.output, report)
     if not cancelled.is_set():
         billing(vast, report, args.billing_wait)
         write_json(args.output, report)
     print(check_summary(report, args.workflow_url))
-    return {"regression": 2, "incorrect": 2, "unavailable": 3, "inconclusive": 3}.get(report["status"], 0)
+    return exit_code(report["status"])
+
+
+def saved_baseline_digest(report: dict) -> str:
+    saved = report["base"].get("kernel_sha256")
+    if saved is not None:
+        return saved
+    baseline, _ = revision(report["base"]["sha"], report["kernel"])
+    return baseline["kernel_sha256"]
+
+
+def combine_saved(args) -> int:
+    earlier = json.loads(args.earlier.read_text())
+    current = json.loads(args.current.read_text())
+    if saved_baseline_digest(earlier) != saved_baseline_digest(current):
+        raise ValueError("The original and retry used different baseline kernel source")
+    if earlier["head"].get("kernel_sha256") is None:
+        head, _ = revision(earlier["head"]["sha"], earlier["kernel"])
+        earlier["head"] = head
+    combined = combine_reports(earlier, current)
+    write_json(args.current, combined)
+    print(check_summary(combined, combined["workflow_url"]))
+    return exit_code(combined["status"])
 
 
 def refresh_charges(args) -> int:
@@ -344,6 +375,10 @@ def main() -> int:
     run.add_argument("--billing-wait", type=nonnegative_integer, default=30)
     run.add_argument("--dry-run", action="store_true", help="Search matching offers without renting")
     run.set_defaults(action=compare)
+    combine = commands.add_parser("combine", help="Combine two saved reports for the same kernel comparison")
+    combine.add_argument("--earlier", type=Path, required=True)
+    combine.add_argument("--current", type=Path, required=True)
+    combine.set_defaults(action=combine_saved)
     reconcile = commands.add_parser("billing", help="Refresh provider-reported charges on a saved report")
     reconcile.add_argument("--report", type=Path, required=True)
     reconcile.add_argument("--wait", type=nonnegative_integer, default=0)

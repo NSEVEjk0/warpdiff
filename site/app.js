@@ -143,10 +143,17 @@ function render(data, source, file) {
   report = validate(data);
   setNotice('');
   byId('report').hidden = false;
-  byId('run-source').textContent = source;
+  const sources = Array.isArray(report.sources) ? report.sources : [];
+  byId('run-source').textContent = sources.length > 1 ? `${source} · ${sources.length} RUNS` : source;
   const filename = typeof report.kernel === 'string' ? report.kernel.split('/').at(-1) : null;
   byId('report-title').textContent = filename === 'softmax.py' ? 'Softmax benchmark' : 'GPU benchmark';
-  byId('revisions').replaceChildren('Baseline ', element('code', '', report.base.sha.slice(0, 8)), ' → candidate ', element('code', '', report.head.sha.slice(0, 8)));
+  const bases = new Set([report.base.sha]);
+  for (const source of sources) {
+    if (/^[0-9a-f]{40,64}$/i.test(source?.base?.sha)) bases.add(source.base.sha);
+  }
+  const baseline = Array.from(bases, (sha) => sha.slice(0, 8)).join(' / ');
+  byId('revisions').replaceChildren(bases.size > 1 ? 'Baselines ' : 'Baseline ', element('code', '', baseline),
+    ' → candidate ', element('code', '', report.head.sha.slice(0, 8)));
   const status = byId('run-result');
   status.className = `pill ${report.status}`;
   status.textContent = report.status === 'regression' ? 'Regression detected' : statuses[report.status];

@@ -17,8 +17,9 @@ DISK_GB = 24
 
 
 class APIError(RuntimeError):
-    def __init__(self, method: str, path: str, status: int | None, reason: str = ""):
+    def __init__(self, method: str, path: str, status: int | None, reason: str = "", code: str | None = None):
         self.status = status
+        self.code = code
         super().__init__(f"Vast {method} {path} ({status or 'connection error'})" + (f": {reason}" if reason else ""))
 
 
@@ -59,7 +60,7 @@ class Vast:
                 with self._opener.open(request, timeout=20) as response:
                     result = json.load(response)
                 if result.get("success") is False:
-                    raise APIError(method, path, 400, api_reason(result))
+                    raise APIError(method, path, 400, api_reason(result), result.get("error"))
                 return result
             except HTTPError as error:
                 if error.code == 429 and attempt < 3:
@@ -68,10 +69,12 @@ class Vast:
                     time.sleep(delay)
                     continue
                 try:
-                    reason = api_reason(json.load(error))
+                    result = json.load(error)
                 except (ValueError, AttributeError):
-                    reason = ""
-                raise APIError(method, path, error.code, reason) from None
+                    result = {}
+                if not isinstance(result, dict):
+                    result = {}
+                raise APIError(method, path, error.code, api_reason(result), result.get("error")) from None
             except (URLError, TimeoutError, ValueError) as error:
                 raise APIError(method, path, None, str(getattr(error, "reason", error))) from None
 

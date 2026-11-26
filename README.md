@@ -9,6 +9,8 @@ WarpDiff checks whether a Triton change that passes correctness tests also holds
 3. In **Actions → WarpDiff → Run workflow**, use `main`, enter the PR number, and select `review`. `showcase` runs additional iterations for at least 31 CUDA-timed minutes on each GPU. Both profiles rent real GPUs.
 4. Open **Checks → WarpDiff / GPU performance** on the PR. The linked workflow run contains the raw timing samples and the provider receipt when available.
 
+If one GPU finishes a showcase run and the other is unavailable, select the profile for that missing GPU and enter the earlier workflow's run ID under **comparison_run**. The check combines measurements only when the baseline and candidate kernel source match. The report links back to the original runs.
+
 The workflow reads the benchmark harness from `main` and sends the two kernel files to the disposable workers. It accepts open PRs with trusted contributors who can push branches to the repository. Only dispatch a run for code you trust. The supported workload is the included FP32 softmax interface `softmax(source, output)`.
 
 ## Run locally
