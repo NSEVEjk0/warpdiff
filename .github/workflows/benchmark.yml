@@ -1,0 +1,134 @@
+name: WarpDiff
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: Open pull request number from this repository
+        required: true
+        type: number
+      profile:
+        description: Benchmark duration
+        type: choice
+        options: [review, showcase]
+        default: review
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: write
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: warpdiff-${{ inputs.pull_request }}
+  cancel-in-progress: false
+
+jobs:
+  compare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 54
+    env:
+      PR: ${{ inputs.pull_request }}
+      WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      WARPDIFF_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Resolve pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$PR" =~ ^[1-9][0-9]*$ ]]
+          metadata=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR")
+          jq -e --arg repo "$GITHUB_REPOSITORY" \
+            '.state == "open" and .head.repo.full_name == $repo and .base.ref == "main"' <<< "$metadata" >/dev/null
+          jq -r '"base=\(.base.sha)\nhead=\(.head.sha)"' <<< "$metadata" >> "$GITHUB_OUTPUT"
+
+      - name: Start GPU check on the candidate commit
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.pr.outputs.head }}
+        run: |
+          check_id=$(jq -n --arg head "$HEAD_SHA" --arg url "$WORKFLOW_URL" \
+            '{name:"WarpDiff / GPU performance", head_sha:$head, details_url:$url, status:"in_progress"}' |
+            gh api --method POST "repos/$GITHUB_REPOSITORY/check-runs" --input - --jq .id)
+          echo "id=$check_id" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Compare the two revisions on Vast
+        id: benchmark
+        env:
+          VASTAI_API_KEY: ${{ secrets.VASTAI_API_KEY }}
+          BASE_SHA: ${{ steps.pr.outputs.base }}
+          HEAD_SHA: ${{ steps.pr.outputs.head }}
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          mkdir -p artifacts
+          active=0
+          if [[ "$PROFILE" == showcase ]]; then
+            active=1860
+          fi
+          result=0
+          python3 -m warpdiff compare --base "$BASE_SHA" --head "$HEAD_SHA" \
+            --run-id "$WARPDIFF_RUN_ID" --repository "$GITHUB_REPOSITORY" --pull-request "$PR" \
+            --active-seconds "$active" --workflow-url "$WORKFLOW_URL" --max-hourly 0.85 \
+            --output artifacts/report.json > artifacts/check.md || result=$?
+          if [[ -s artifacts/check.md ]]; then
+            cat artifacts/check.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "exit_code=$result" >> "$GITHUB_OUTPUT"
+
+      - name: Retry cleanup after a partial run
+        if: always()
+        env:
+          VASTAI_API_KEY: ${{ secrets.VASTAI_API_KEY }}
+        run: |
+          if [[ -d ".warpdiff/$WARPDIFF_RUN_ID" ]] && compgen -G ".warpdiff/$WARPDIFF_RUN_ID/card-*.json" >/dev/null; then
+            python3 -m warpdiff cleanup --state-dir ".warpdiff/$WARPDIFF_RUN_ID"
+          fi
+
+      - name: Save report and raw timings
+        if: always() && hashFiles('artifacts/report.json') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: warpdiff-evidence
+          path: |
+            artifacts/report.json
+            artifacts/check.md
+          retention-days: 30
+
+      - name: Complete the pull request check
+        if: always() && steps.check.outputs.id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECK_ID: ${{ steps.check.outputs.id }}
+          EXIT_CODE: ${{ steps.benchmark.outputs.exit_code }}
+        run: |
+          conclusion=failure
+          title='Benchmark unavailable'
+          case "$EXIT_CODE" in
+            0) conclusion=success; title='Benchmark passed' ;;
+            2) title='Correctness failure or GPU regression' ;;
+            3) title='Benchmark inconclusive or unavailable' ;;
+          esac
+          if [[ ! -s artifacts/check.md ]]; then
+            mkdir -p artifacts
+            printf 'Open the workflow log for the benchmark failure.\n' > artifacts/check.md
+          fi
+          jq -n --arg conclusion "$conclusion" --arg title "$title" --rawfile summary artifacts/check.md \
+            '{status:"completed", conclusion:$conclusion, output:{title:$title, summary:$summary}}' |
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/check-runs/$CHECK_ID" --input - >/dev/null
+
+      - name: Enforce the benchmark result
+        if: always()
+        env:
+          EXIT_CODE: ${{ steps.benchmark.outputs.exit_code }}
+        run: test "$EXIT_CODE" = 0
