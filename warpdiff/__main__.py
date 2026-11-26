@@ -59,7 +59,10 @@ def find_offers(vast: Vast, args, gpu: str) -> list[dict]:
     offers = []
     for model in GPU_MODELS.get(gpu, (gpu,)):
         offers.extend(vast.offers(model, args.max_hourly, args.max_transfer_rate, duration))
-    return sorted(offers, key=lambda offer: float(offer["dph_total"]))
+    return sorted(
+        (offer for offer in offers if offer.get("machine_id") not in args.exclude_machine),
+        key=lambda offer: float(offer["dph_total"]),
+    )
 
 
 def cleanup(vast: Vast, state: Path, record: dict) -> bool:
@@ -100,6 +103,7 @@ def wait_for_worker(vast: Vast, instance_id: int, directory: Path, cancelled, ti
     public_key = (directory / "worker.pub").read_text().strip()
     key_added = False
     last_status = None
+    last_error = None
     while not cancelled.is_set() and time.monotonic() < deadline:
         instance = vast.instance(instance_id)
         status = instance.get("actual_status", "pending") if instance else "pending"
@@ -108,17 +112,23 @@ def wait_for_worker(vast: Vast, instance_id: int, directory: Path, cancelled, ti
             last_status = status
         if status in {"exited", "offline", "error", "unknown"}:
             raise RuntimeError(f"Vast rental entered {status}")
-        if instance and status == "running" and instance.get("ssh_host") and instance.get("ssh_port"):
+        if instance and status == "running" and (
+            ((instance.get("ports") or {}).get("22/tcp") and instance.get("public_ipaddr"))
+            or (instance.get("ssh_host") and instance.get("ssh_port"))
+        ):
             if not key_added:
                 vast.attach(instance_id, public_key)
                 key_added = True
             try:
                 ssh(instance, directory / "worker", directory / "known_hosts", ["true"], 12, cancelled)
                 return instance
-            except (TimeoutError, RuntimeError):
-                pass
+            except (TimeoutError, RuntimeError) as error:
+                if last_error is None:
+                    log(f"Rental {instance_id}: {error}")
+                last_error = error
         cancelled.wait(5)
-    raise TimeoutError(f"Rental {instance_id} did not become SSH-ready in {timeout} seconds")
+    detail = f" ({last_error})" if last_error else ""
+    raise TimeoutError(f"Rental {instance_id} did not become SSH-ready in {timeout} seconds{detail}")
 
 
 def run_card(vast: Vast, args, gpu: str, offers: list[dict], state: Path, run_id: str, archive: bytes, cancelled) -> dict:
@@ -146,6 +156,7 @@ def run_card(vast: Vast, args, gpu: str, offers: list[dict], state: Path, run_id
         record["instance_ids"].append(instance_id)
         write_json(state, record)
         card["instance_id"] = instance_id
+        card["machine_id"] = offer.get("machine_id")
         log(f"{gpu}: rented {instance_id} at quoted ${card['offer_hourly_usd']:.3f}/hour")
 
         with tempfile.TemporaryDirectory(prefix="warpdiff-ssh-") as path:
@@ -153,7 +164,7 @@ def run_card(vast: Vast, args, gpu: str, offers: list[dict], state: Path, run_id
             identity, known_hosts = directory / "worker", directory / "known_hosts"
             subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(identity)], check=True)
             instance = wait_for_worker(vast, instance_id, directory, cancelled, args.startup_seconds)
-            card["machine_id"] = instance.get("machine_id")
+            card["machine_id"] = instance.get("machine_id") or card["machine_id"]
             ssh(instance, identity, known_hosts, ["mkdir", "-p", REMOTE_DIR], 18, cancelled)
             ssh(instance, identity, known_hosts, ["tar", "-xzf", "-", "-C", REMOTE_DIR], 30, cancelled, archive)
             command = [
@@ -319,6 +330,7 @@ def main() -> int:
     run.add_argument("--gpu", action="append", help="Repeat to pick GPUs; default: RTX 4090 and A100")
     run.add_argument("--max-hourly", type=positive, default=1.20, help="Maximum quoted USD/hour per rental")
     run.add_argument("--max-transfer-rate", type=positive, default=0.02, help="Maximum USD/GB per direction")
+    run.add_argument("--exclude-machine", type=int, action="append", default=[], help="Skip a previously failed Vast host")
     run.add_argument("--startup-seconds", type=nonnegative_integer, default=480)
     run.add_argument("--active-seconds", type=nonnegative_integer, default=0, help="Minimum active benchmark duration per GPU")
     run.add_argument("--pairs", type=nonnegative_integer, default=35)

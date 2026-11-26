@@ -12,6 +12,9 @@ on:
         type: choice
         options: [review, showcase]
         default: review
+      exclude_machine:
+        description: Optional Vast machine ID to skip
+        type: number
 
 permissions:
   contents: read
@@ -70,16 +73,22 @@ jobs:
           BASE_SHA: ${{ steps.pr.outputs.base }}
           HEAD_SHA: ${{ steps.pr.outputs.head }}
           PROFILE: ${{ inputs.profile }}
+          EXCLUDE_MACHINE: ${{ inputs.exclude_machine }}
         run: |
           mkdir -p artifacts
           active=0
           if [[ "$PROFILE" == showcase ]]; then
             active=1860
           fi
+          offer_filters=()
+          if [[ "$EXCLUDE_MACHINE" =~ ^[1-9][0-9]*$ ]]; then
+            offer_filters+=(--exclude-machine "$EXCLUDE_MACHINE")
+          fi
           result=0
           python3 -m warpdiff compare --base "$BASE_SHA" --head "$HEAD_SHA" \
             --run-id "$WARPDIFF_RUN_ID" --repository "$GITHUB_REPOSITORY" --pull-request "$PR" \
-            --active-seconds "$active" --workflow-url "$WORKFLOW_URL" --max-hourly 0.85 \
+            --active-seconds "$active" --workflow-url "$WORKFLOW_URL" --max-hourly 0.85 --startup-seconds 300 \
+            "${offer_filters[@]}" \
             --output artifacts/report.json > artifacts/check.md || result=$?
           if [[ -s artifacts/check.md ]]; then
             cat artifacts/check.md >> "$GITHUB_STEP_SUMMARY"

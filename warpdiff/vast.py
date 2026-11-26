@@ -93,6 +93,7 @@ class Vast:
             "inet_up_cost": {"lte": traffic_rate},
             "inet_down_cost": {"lte": traffic_rate},
             "inet_down": {"gte": 150},
+            "direct_port_count": {"gte": 1},
             "order": [["dph_total", "asc"]],
         })
         return [offer for offer in result.get("offers", []) if 0 < float(offer["dph_total"]) <= rate]
@@ -102,7 +103,7 @@ class Vast:
             "image": IMAGE,
             "label": label,
             "disk": DISK_GB,
-            "runtype": "ssh_proxy",
+            "runtype": "ssh_direct",
             "target_state": "running",
             "cancel_unavail": True,
         })
@@ -112,7 +113,7 @@ class Vast:
         params = {"select_filters": json.dumps({"label": {"eq": label}})}
         matches = []
         while True:
-            result = self.request("GET", "/api/v1/instances", params=params)
+            result = self.request("GET", "/api/v1/instances/", params=params)
             matches.extend(item for item in result.get("instances", []) if item.get("label") == label)
             next_token = result.get("next_token")
             if not next_token:
@@ -145,7 +146,7 @@ class Vast:
         params = {"select_filters": json.dumps({"day": {"gte": start, "lte": end}, "type": {"in": ["instance"]}})}
         rows = []
         while True:
-            result = self.request("GET", "/api/v0/charges", params=params)
+            result = self.request("GET", "/api/v0/charges/", params=params)
             rows.extend(result.get("results", []))
             next_token = result.get("next_token")
             if not next_token:
@@ -159,7 +160,11 @@ def api_reason(result: dict) -> str:
 
 
 def ssh_command(instance: dict, identity: Path, known_hosts: Path, remote_command: str) -> list[str]:
-    host, port = str(instance["ssh_host"]), int(instance["ssh_port"])
+    ports = (instance.get("ports") or {}).get("22/tcp")
+    if ports and instance.get("public_ipaddr"):
+        host, port = instance["public_ipaddr"], int(ports[0]["HostPort"])
+    else:
+        host, port = str(instance["ssh_host"]), int(instance["ssh_port"])
     if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9.-]*", host) or not (1 <= port <= 65535):
         raise ValueError("Vast returned invalid SSH connection details")
     return [
