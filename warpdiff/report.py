@@ -188,15 +188,22 @@ def check_summary(report: dict, details_url: str | None = None) -> str:
                     f"| {gpu} | {input_label} | {case['base_ms'] * 1000:.2f} µs | {case['head_ms'] * 1000:.2f} µs | "
                     f"{case['change_pct']:+.2f}% | {status} |"
                 )
+    cases = [case for card in report["cards"] if not card.get("error") for case in card.get("cases", [])]
+    if cases and all(case.get("correctness", {}).get("passed") is True for case in cases):
+        lines.extend(["", "Both versions matched the reference in every reported case."])
+    seconds = report["active_gpu_seconds"]
+    duration = f"{seconds:.3f} seconds" if seconds < 60 else f"{seconds / 60:.2f} minutes"
     lines.extend([
         "", "Change is the median percentage across all timing pairs. A positive number means the patched kernel ran slower.",
-        "", f"**{report['active_gpu_seconds'] / 60:.2f} minutes** of active GPU time.", "",
+        "", f"**{duration}** of active GPU time.", "",
     ])
     for card in report["cards"]:
         gpu = markdown_text(card.get("gpu_name") or card["requested_gpu"])
         charges = card.get("charges", {})
         if card.get("instance_id"):
-            receipt = f"Vast reported ${charges['total_usd']:.5f} in charges" if charges.get("status") == "reported" else "Vast charges pending"
+            receipt = "Vast charges pending"
+            if charges.get("status") == "reported":
+                receipt = f"Vast had posted ${charges['total_usd']:.5f} when this report was generated"
             cleanup = "Rental deleted." if card["cleanup"] == "verified" else "Rental deletion unconfirmed."
             lines.append(f"- {gpu} · {receipt}. {cleanup}")
     if details_url:

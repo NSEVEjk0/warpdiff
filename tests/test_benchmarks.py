@@ -11,7 +11,7 @@ from unittest.mock import Mock
 
 from warpdiff.__main__ import make_archive, rent, verify_saved_pair
 from warpdiff.benchmark import git_commit, select
-from warpdiff.report import combine_reports
+from warpdiff.report import check_summary, combine_reports
 from warpdiff.vast import APIError
 from warpdiff.worker import revision_module
 
@@ -108,3 +108,19 @@ cases = [{id = "scalar", label = "One scalar", size = 1}]
         rented = rent(vast, args, "RTX 3090", [first], "warpdiff-test", threading.Event())
         self.assertEqual(rented, (20, second))
         self.assertEqual([call.args[0] for call in vast.create.call_args_list], [17, 18])
+
+    def test_check_summary_shows_short_run_time_and_reference_result(self):
+        case = {
+            "label": "65,537 elements", "status": "improvement", "correctness": {"passed": True},
+            "base_ms": 0.004, "head_ms": 0.003, "change_pct": -25.0,
+        }
+        report = {
+            "base": {"sha": "a" * 40}, "head": {"sha": "b" * 40}, "margin_pct": 5,
+            "cards": [{"requested_gpu": "RTX 3090", "cases": [case]}], "active_gpu_seconds": 0.14,
+        }
+        summary = check_summary(report)
+        self.assertIn("**0.140 seconds** of active GPU time.", summary)
+        self.assertIn("Both versions matched the reference", summary)
+        self.assertIn("**62.00 minutes**", check_summary({**report, "active_gpu_seconds": 3720.001}))
+        del case["correctness"]
+        self.assertNotIn("Both versions matched the reference", check_summary(report))
