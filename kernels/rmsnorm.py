@@ -5,25 +5,17 @@ import triton.language as tl
 
 
 @triton.jit
-def _inverse_rms(source, inverse_rms, columns: tl.constexpr, block: tl.constexpr, epsilon: tl.constexpr):
+def _normalize(source, weight, output, columns: tl.constexpr, block: tl.constexpr, epsilon: tl.constexpr):
     row = tl.program_id(0)
     column = tl.arange(0, block)
-    value = tl.load(source + row * columns + column, column < columns, other=0)
-    inverse = tl.rsqrt(tl.sum(value * value, axis=0) / columns + epsilon)
-    tl.store(inverse_rms + row, inverse)
-
-
-@triton.jit
-def _scale_rows(source, weight, output, inverse_rms, size, columns: tl.constexpr, block: tl.constexpr):
-    index = tl.program_id(0) * block + tl.arange(0, block)
-    mask = index < size
+    index = row * columns + column
+    mask = column < columns
     value = tl.load(source + index, mask, other=0)
-    inverse = tl.load(inverse_rms + index // columns, mask, other=0)
-    scale = tl.load(weight + index % columns, mask, other=0)
+    inverse = tl.rsqrt(tl.sum(value * value, axis=0) / columns + epsilon)
+    scale = tl.load(weight + column, mask, other=0)
     tl.store(output + index, value * inverse * scale, mask)
 
 
-def rmsnorm(source, weight, output, inverse_rms, epsilon):
+def rmsnorm(source, weight, output, _inverse_rms_buffer, epsilon):
     rows, columns = source.shape
-    _inverse_rms[(rows,)](source, inverse_rms, columns, triton.next_power_of_2(columns), epsilon)
-    _scale_rows[(triton.cdiv(rows * columns, 512),)](source, weight, output, inverse_rms, rows * columns, columns, 512)
+    _normalize[(rows,)](source, weight, output, columns, triton.next_power_of_2(columns), epsilon)
