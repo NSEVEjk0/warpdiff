@@ -20,6 +20,10 @@ class APIError(RuntimeError):
     def __init__(self, method: str, path: str, status: int | None, reason: str = "", code: str | None = None):
         self.status = status
         self.code = code
+        if method == "PUT" and path.startswith("/api/v0/asks/") and status == 400:
+            # The API sometimes wraps an unavailable offer in a generic 400 response.
+            if re.match(r"error (?:404|409|410)/\d+:\s+no_such_ask\b", reason, re.IGNORECASE):
+                self.code = "no_such_ask"
         super().__init__(f"Vast {method} {path} ({status or 'connection error'})" + (f": {reason}" if reason else ""))
 
 

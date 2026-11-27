@@ -143,32 +143,43 @@ def wait_for_worker(vast: Vast, instance_id: int, directory: Path, cancelled, ti
     raise TimeoutError(f"Rental {instance_id} did not become SSH-ready in {timeout} seconds{detail}")
 
 
+def rent(vast: Vast, args, gpu: str, offers: list[dict], label: str, cancelled) -> tuple[int, dict]:
+    tried = set()
+    for attempt in range(2):
+        if cancelled.is_set():
+            raise RuntimeError("Run cancelled")
+        if attempt:
+            offers = find_offers(vast, args, gpu)
+        for offer in offers:
+            if cancelled.is_set():
+                raise RuntimeError("Run cancelled")
+            offer_id = int(offer["id"])
+            if offer_id in tried:
+                continue
+            tried.add(offer_id)
+            try:
+                return vast.create(offer_id, label), offer
+            except APIError as error:
+                if error.status not in {404, 409, 410} and error.code != "no_such_ask":
+                    raise
+                log(f"{gpu}: offer {offer_id} was no longer rentable")
+    raise RuntimeError("All selected offers disappeared before renting")
+
+
 def run_card(vast: Vast, args, gpu: str, offers: list[dict], state: Path, run_id: str, archive: bytes, cancelled) -> dict:
     label = f"warpdiff-{run_id}-{state.stem}"
     record = {"label": label, "instance_ids": [], "cleanup": "pending"}
     card = {"requested_gpu": gpu, "label": label}
-    instance_id = None
     try:
         if cancelled.is_set() or not offers:
             raise RuntimeError("No eligible offer within the requested price and host limits")
         record["creating"] = True
         write_json(state, record)
-        for offer in offers:
-            if cancelled.is_set():
-                raise RuntimeError("Run cancelled")
-            try:
-                instance_id = vast.create(int(offer["id"]), label)
-                card["offer_hourly_usd"] = float(offer["dph_total"])
-                break
-            except APIError as error:
-                if error.status not in {404, 409, 410} and error.code != "no_such_ask":
-                    raise
-                log(f"{gpu}: offer {offer['id']} was no longer rentable")
-        if instance_id is None:
-            raise RuntimeError("All selected offers disappeared before renting")
+        instance_id, offer = rent(vast, args, gpu, offers, label, cancelled)
         record["instance_ids"].append(instance_id)
         write_json(state, record)
         card["instance_id"] = instance_id
+        card["offer_hourly_usd"] = float(offer["dph_total"])
         card["machine_id"] = offer.get("machine_id")
         log(f"{gpu}: rented {instance_id} at quoted ${card['offer_hourly_usd']:.3f}/hour")
 
