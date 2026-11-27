@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       pull_request:
-        description: Open pull request number from this repository
+        description: Number of an open pull request in this repository
         required: true
         type: number
       profile:
@@ -16,7 +16,7 @@ on:
         description: Optional Vast machine ID to skip
         type: number
       comparison_run:
-        description: Optional completed showcase run whose report supplies the other GPU
+        description: Earlier run ID to include in the report (optional)
         type: number
 
 permissions:
@@ -133,7 +133,7 @@ jobs:
             python3 -m warpdiff cleanup --state-dir ".warpdiff/$WARPDIFF_RUN_ID"
           fi
 
-      - name: Combine paired-device reports from completed runs
+      - name: Combine timings from both GPUs
         id: combination
         if: always() && inputs.comparison_run > 0 && hashFiles('artifacts/report.json') != ''
         run: |

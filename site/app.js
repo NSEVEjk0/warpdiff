@@ -80,7 +80,7 @@ function cardFor(card, item, scale) {
   if (item && number(item.change_pct)) {
     panel.append(element('p', 'delta', percent(item.change_pct)),
       element('p', 'confidence', `95% interval ${item.interval_pct.map(percent).join(' to ')} · ${item.paired_samples} pairs`),
-      latencyRow('Baseline', item.base_ms, scale, false), latencyRow('Candidate', item.head_ms, scale, true));
+      latencyRow('Original', item.base_ms, scale, false), latencyRow('Patched', item.head_ms, scale, true));
   } else {
     panel.append(element('p', 'missing', item?.status === 'incorrect' ? 'One or both revisions disagreed with PyTorch.' : 'No timing for this GPU.'));
   }
@@ -122,7 +122,7 @@ function showStats() {
   const chargeLabel = report.billing_status === 'settled' ? 'Vast charges' : 'Vast charges at report time';
   const cleaned = report.cards.filter((card) => card.cleanup === 'verified').length;
   const stats = [
-    [`${(report.active_gpu_seconds / 60).toFixed(2)} min`, 'CUDA-timed work'],
+    [`${(report.active_gpu_seconds / 60).toFixed(2)} min`, 'Active GPU time'],
     [receipt, chargeLabel],
     [`${cleaned} / ${report.cards.length}`, 'Rentals removed'],
   ];
@@ -153,8 +153,8 @@ function render(data, source, file) {
     if (/^[0-9a-f]{40,64}$/i.test(source?.base?.sha)) bases.add(source.base.sha);
   }
   const baseline = Array.from(bases, (sha) => sha.slice(0, 8)).join(' / ');
-  byId('revisions').replaceChildren(bases.size > 1 ? 'Baselines ' : 'Baseline ', element('code', '', baseline),
-    ' → candidate ', element('code', '', report.head.sha.slice(0, 8)));
+  byId('revisions').replaceChildren('Original ', element('code', '', baseline),
+    ' → patched ', element('code', '', report.head.sha.slice(0, 8)));
   const status = byId('run-result');
   status.className = `pill ${report.status}`;
   status.textContent = report.status === 'regression' ? 'Regression detected' : statuses[report.status];
@@ -208,8 +208,8 @@ fetch('report.json', {cache: 'no-cache'}).then((response) => {
   return response.json();
 }).then((data) => {
   if (report) return;
-  if (data) render(data, data.provenance === 'vast' ? 'VAST.AI HARDWARE RUN' : 'PUBLISHED REPORT');
-  else setNotice('Open a WarpDiff JSON report to compare the measured GPUs.');
+  if (data) render(data, data.provenance === 'vast' ? 'VAST.AI BENCHMARK' : 'PUBLISHED REPORT');
+  else setNotice('Open a WarpDiff JSON report to see its GPU timings.');
 }).catch(() => {
-  if (!report) setNotice('The published benchmark could not be loaded. Open a local WarpDiff JSON report to continue.', true);
+  if (!report) setNotice('Couldn’t load the benchmark. You can still open a local WarpDiff JSON report.', true);
 });

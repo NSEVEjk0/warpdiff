@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#111517">
-  <meta name="description" content="Compare the baseline and candidate of a Triton pull request on Vast.ai GPUs.">
-  <title>WarpDiff · GPU pull request checks</title>
+  <meta name="description" content="See how long the original and patched Triton kernels take on each Vast.ai GPU.">
+  <title>WarpDiff · GPU benchmarks for pull requests</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="styles.css">
   <script src="app.js" defer></script>
@@ -17,7 +17,7 @@
       <nav aria-label="Report navigation">
         <a class="nav-method" href="#method">Method</a>
         <a class="button quiet" id="evidence-link" href="report.json" download hidden>Download JSON <span aria-hidden="true">↓</span></a>
-        <button class="button" id="open-report" type="button">Open report <span aria-hidden="true">↗</span></button>
+        <button class="button" id="open-report" type="button">Open JSON report <span aria-hidden="true">↗</span></button>
         <input type="file" id="report-input" accept=".json,application/json" hidden>
       </nav>
     </div>
@@ -25,12 +25,11 @@
 
   <main class="frame">
     <section class="intro" aria-labelledby="intro-title">
-      <p class="eyebrow"><span class="signal" aria-hidden="true"></span> GPU PERFORMANCE CHECK</p>
-      <h1 id="intro-title">GPU performance,<br><span>before you merge.</span></h1>
-      <p class="intro-copy">Compare a Triton patch on the GPUs you ship to. WarpDiff measures both revisions on the same Vast.ai rental and turns the results into a GitHub check.</p>
+      <h1 id="intro-title">GPU benchmarks<br><span>for pull requests</span></h1>
+      <p class="intro-copy">WarpDiff runs the original and patched Triton kernel on each Vast.ai GPU. On GitHub, open the pull request’s <strong>Checks</strong> tab to see the timings and which inputs slowed down.</p>
     </section>
 
-    <p id="load-status" class="notice" role="status">Loading the published benchmark…</p>
+    <p id="load-status" class="notice" role="status">Loading benchmark results…</p>
     <section class="report" id="report" aria-labelledby="report-title" hidden>
       <div class="run-header">
         <div>
@@ -53,10 +52,10 @@
       <div class="stats" id="stats"></div>
 
       <div class="all-shapes">
-        <h3>All measurements</h3>
+        <h3>All timings</h3>
         <div class="table-wrap" tabindex="0" role="region" aria-label="Timing results table">
           <table>
-            <thead><tr><th scope="col">GPU</th><th scope="col">Input</th><th scope="col">Baseline</th><th scope="col">Candidate</th><th scope="col">Change</th><th scope="col">Result</th></tr></thead>
+            <thead><tr><th scope="col">GPU</th><th scope="col">Input</th><th scope="col">Original</th><th scope="col">Patched</th><th scope="col">Change</th><th scope="col">Result</th></tr></thead>
             <tbody id="results-table"></tbody>
           </table>
         </div>
@@ -65,13 +64,12 @@
 
     <section class="method" id="method" aria-labelledby="method-title">
       <div class="method-header">
-        <p class="eyebrow"><span class="signal" aria-hidden="true"></span> METHODOLOGY</p>
-        <h2 id="method-title">How the check works</h2>
+        <h2 id="method-title">How WarpDiff tests a patch</h2>
       </div>
       <div class="method-grid">
-        <div><h3>Verify correctness</h3><p>Both revisions run against the same PyTorch reference on each GPU before timing begins.</p></div>
-        <div><h3>Time both revisions</h3><p>Randomized, paired CUDA graph timings measure the change on each device. An interval fully above the threshold fails the check.</p></div>
-        <div><h3>Close the rentals</h3><p>WarpDiff verifies that Vast removed the workers and updates the report when provider charges are available.</p></div>
+        <div><h3>Check the outputs</h3><p>WarpDiff compares both versions with PyTorch on each GPU before timing them.</p></div>
+        <div><h3>Time the kernels</h3><p>WarpDiff times both versions in pairs and randomizes which goes first. It flags a slowdown if the entire 95% confidence interval is above the cutoff.</p></div>
+        <div><h3>End the rentals</h3><p>After the run, WarpDiff deletes the rentals and lists the charges Vast has reported.</p></div>
       </div>
     </section>
   </main>

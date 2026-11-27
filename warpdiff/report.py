@@ -137,17 +137,17 @@ def write_json(path: Path, value: dict) -> None:
 
 
 def check_summary(report: dict, details_url: str | None = None) -> str:
-    baseline = f"Baseline `{report['base']['sha'][:12]}`"
+    baseline = f"Original `{report['base']['sha'][:12]}`"
     if report.get("sources"):
         commits = dict.fromkeys(source["base"]["sha"] for source in report["sources"])
-        baseline = "Baselines " + " / ".join(f"`{commit[:12]}`" for commit in commits)
+        baseline = "Original " + " / ".join(f"`{commit[:12]}`" for commit in commits)
     lines = [
         "### GPU performance on Vast.ai",
         "",
-        f"{baseline} · candidate `{report['head']['sha'][:12]}` · "
-        f"regression threshold **{report['margin_pct']}%**",
+        f"{baseline} · patched `{report['head']['sha'][:12]}` · "
+        f"slowdown cutoff **{report['margin_pct']}%**",
         "",
-        "| GPU | Input | Baseline | Candidate | Change | Result |",
+        "| GPU | Input | Original | Patched | Change | Result |",
         "| --- | --- | ---: | ---: | ---: | --- |",
     ]
     format_status = {
@@ -173,16 +173,19 @@ def check_summary(report: dict, details_url: str | None = None) -> str:
                     f"| {gpu} | {input_label} | {case['base_ms']:.3f} ms | {case['head_ms']:.3f} ms | "
                     f"{case['change_pct']:+.2f}% | {status} |"
                 )
-    lines.extend(["", "Change is the median paired latency difference. Positive percentages indicate a slowdown."])
-    lines.append(f"CUDA-timed work: **{report['active_gpu_seconds'] / 60:.2f} GPU-minutes**.")
+    lines.extend([
+        "", "Change is the median percentage across all timing pairs. A positive number means the patched kernel ran slower.",
+        "", f"**{report['active_gpu_seconds'] / 60:.2f} minutes** of active GPU time.", "",
+    ])
     for card in report["cards"]:
         gpu = card.get("gpu_name") or card["requested_gpu"]
         charges = card.get("charges", {})
-        receipt = f"${charges['total_usd']:.5f} billed" if charges.get("status") == "reported" else "billing pending"
         if card.get("instance_id"):
-            lines.append(f"- {gpu}: {receipt}, cleanup {card['cleanup']}.")
+            receipt = f"Vast reported ${charges['total_usd']:.5f} in charges" if charges.get("status") == "reported" else "Vast charges pending"
+            cleanup = "Rental deleted." if card["cleanup"] == "verified" else "Rental deletion unconfirmed."
+            lines.append(f"- {gpu} · {receipt}. {cleanup}")
     if details_url:
-        lines.extend(["", f"[Full run and JSON evidence]({details_url})"])
+        lines.extend(["", f"[View the workflow run and download timings]({details_url})"])
     for source in report.get("sources", []):
         if source.get("workflow_url") and source["workflow_url"] != details_url:
             lines.append(f"[Earlier benchmark]({source['workflow_url']})")

@@ -29,7 +29,6 @@ a:focus-visible,button:focus-visible,.table-wrap:focus-visible{outline:2px solid
 .intro{padding:60px 0 44px;position:relative;isolation:isolate}
 .intro::before{content:"";position:absolute;inset:18px 0 0 36%;z-index:-1;pointer-events:none;background:repeating-linear-gradient(90deg,transparent 0 39px,#536a5b29 39px 40px),repeating-linear-gradient(0deg,transparent 0 39px,#536a5b29 39px 40px);mask-image:radial-gradient(ellipse at 56% 50%,#000 12%,transparent 72%)}
 .eyebrow{color:var(--mint);font:400 11px/1.5 var(--mono);letter-spacing:.1em;margin:0 0 12px}
-.signal{display:inline-block;width:7px;height:7px;margin-right:8px;vertical-align:1px;border-radius:50%;background:var(--mint);box-shadow:0 0 0 3px #aff0cc1f}
 h1,h2,h3,p{margin-block-start:0}
 h1{font-size:clamp(46px,6.4vw,86px);line-height:.99;font-weight:620;letter-spacing:-.076em;margin:0 0 20px}
 h1 span{color:var(--mint)}
@@ -82,7 +81,6 @@ tbody tr:last-child td{border:0}
 td.measurement{font:400 12px/1.4 var(--mono)}
 td.change{color:var(--status,var(--strong))}
 .method{padding:36px 0 42px}
-.method-header .eyebrow{margin-bottom:7px}
 .method-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:18px}
 .method-grid>div{border-top:1px solid var(--line);padding-top:14px}
 .method h3{margin:0 0 4px;font-size:15px;font-weight:625}
