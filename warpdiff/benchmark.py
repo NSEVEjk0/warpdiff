@@ -22,11 +22,9 @@ def git_commit(ref: str) -> str:
     ).strip()
 
 
-def read_blob(commit: str, path: str, *, optional: bool = False) -> bytes | None:
+def read_blob(commit: str, path: str) -> bytes:
     record = subprocess.check_output(["git", "--literal-pathspecs", "ls-tree", "-z", commit, "--", path])
     if not record:
-        if optional:
-            return None
         raise ValueError(f"{path} is missing from {commit[:12]}")
     metadata, name = record.rstrip(b"\0").split(b"\t", 1)
     mode, kind, blob = metadata.decode().split()
@@ -98,7 +96,6 @@ class Benchmark:
     files: tuple[str, ...]
     gpus: tuple[str, ...]
     margin_pct: float
-    adapter_path: str | None = None
     adapter: bytes | None = None
     job: dict | None = None
     metadata: dict | None = None
@@ -159,4 +156,4 @@ def select(base: str, name: str | None, legacy_kernel: str | None) -> Benchmark:
         "id": name, "name": title, "adapter": adapter_path, "gpus": list(gpus),
         "definition_sha256": digest(definition),
     }
-    return Benchmark(kernel, files, gpus, margin, adapter_path, adapter, job, metadata)
+    return Benchmark(kernel, files, gpus, margin, adapter=adapter, job=job, metadata=metadata)

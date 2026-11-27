@@ -2,7 +2,9 @@
 
 WarpDiff runs a repo’s GPU benchmark on the original and patched code. It rents the GPU models you choose from Vast.ai, checks both outputs, and posts the timings under **Checks** on the pull request.
 
-[Open the report viewer](https://warpdiff.vercel.app/)
+[Softmax report](https://warpdiff.vercel.app/?benchmark=softmax) · [RMSNorm report](https://warpdiff.vercel.app/?benchmark=rmsnorm)
+
+The softmax check caught a regression on the RTX 4090. The RMSNorm check measured an improvement on the RTX 3090 and RTX 4090. Both tests ran on Vast.ai. [Softmax pull request](https://github.com/NSEVEjk0/warpdiff/pull/1/checks) · [RMSNorm pull request](https://github.com/NSEVEjk0/warpdiff/pull/2/checks)
 
 ## Run a pull request in this repo
 

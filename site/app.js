@@ -11,13 +11,20 @@ const shapeFormatter = new Intl.NumberFormat('en-US');
 const axisFormatter = new Intl.NumberFormat('en-US', {maximumSignificantDigits: 3});
 const dateFormatter = new Intl.DateTimeFormat('en-US', {dateStyle: 'medium', timeZone: 'UTC'});
 const shaPattern = /^[0-9a-f]{40,64}$/i;
+const caseIdPattern = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const publications = {softmax: 'report.json', rmsnorm: 'rmsnorm.json'};
+const requestedPublication = new URLSearchParams(window.location?.search ?? '').get('benchmark');
+const publication = Object.hasOwn(publications, requestedPublication) ? requestedPublication : 'softmax';
+const publicationPath = publications[publication];
 const byId = (id) => document.getElementById(id);
 const number = (value) => typeof value === 'number' && Number.isFinite(value);
 const isSha = (value) => typeof value === 'string' && shaPattern.test(value);
 const hasStatus = (value) => Object.hasOwn(statuses, value);
 const gpuName = (card) => card.gpu_name || card.requested_gpu;
-const shapeKey = ({rows, columns}) => `${rows}x${columns}`;
-const shapeLabel = ({rows, columns}) => `${shapeFormatter.format(rows)} × ${shapeFormatter.format(columns)}`;
+const namedCase = (item) => typeof item.case_id === 'string' && caseIdPattern.test(item.case_id) &&
+  typeof item.label === 'string' && item.label.length > 0 && item.label.length <= 80;
+const shapeKey = (item) => namedCase(item) ? item.case_id : `${item.rows}x${item.columns}`;
+const shapeLabel = (item) => namedCase(item) ? item.label : `${shapeFormatter.format(item.rows)} × ${shapeFormatter.format(item.columns)}`;
 const percent = (value) => `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
 const latency = (value) => `${(value * 1000).toFixed(1)} µs`;
 const dollars = (value) => `$${value.toFixed(4)}`;
@@ -47,10 +54,9 @@ function hasTimings(item) {
 }
 
 function validCase(item) {
-  if (!item || !Number.isInteger(item.rows) || item.rows < 1 ||
-    !Number.isInteger(item.columns) || item.columns < 1 || !hasStatus(item.status)) {
-    return false;
-  }
+  if (!item || !hasStatus(item.status)) return false;
+  const hasDimensions = Number.isInteger(item.rows) && item.rows > 0 && Number.isInteger(item.columns) && item.columns > 0;
+  if (!namedCase(item) && !hasDimensions) return false;
   if (!hasTimings(item)) return true;
   return number(item.base_ms) && item.base_ms > 0 && number(item.head_ms) && item.head_ms > 0 &&
     number(item.base_ms * 1000) && number(item.head_ms * 1000) &&
@@ -193,6 +199,7 @@ function updateComparison() {
   const padded = maximum * 1.12;
   const limit = roundedLimit(number(padded) ? padded : maximum);
   const regressions = timed.filter((item) => item.status === 'regression').length;
+  const improvements = timed.filter((item) => item.status === 'improvement').length;
   const summary = byId('selection-summary');
   if (!timed.length) {
     summary.textContent = selectedShape ? 'No timings for this input.' : 'This report has no recorded timings.';
@@ -201,8 +208,9 @@ function updateComparison() {
     summary.replaceChildren(element('strong', '', count), ' showed a regression on this input.');
   } else if (timed.some((item) => item.status === 'inconclusive')) {
     summary.textContent = 'At least one GPU had inconclusive timings for this input.';
-  } else if (timed.some((item) => item.status === 'improvement')) {
-    summary.textContent = 'The patch was faster than the cutoff on one or more GPUs.';
+  } else if (improvements) {
+    const count = timed.length === 1 ? '1 GPU' : `${improvements} of ${timed.length} measured GPUs`;
+    summary.replaceChildren(element('strong', '', count), ' showed an improvement on this input.');
   } else {
     summary.textContent = 'All measured GPUs stayed within the cutoff.';
   }
@@ -236,7 +244,7 @@ function showTable() {
       status.append(badge(item.status));
       row.append(
         cell('device-name', shortGpuName(card)),
-        cell('measurement', shapeLabel(item)),
+        cell('measurement case-name', shapeLabel(item)),
         cell('measurement numeric', timed ? latency(item.base_ms) : '—', 'Original'),
         cell('measurement numeric', timed ? latency(item.head_ms) : '—', 'Patched'),
         cell(`measurement numeric table-change ${item.status}`, timed ? percent(item.change_pct) : '—', 'Change'),
@@ -264,8 +272,10 @@ function showStats() {
   const rentals = report.cards.filter((card) => card.cleanup === 'verified' || card.cleanup === 'pending');
   const removed = rentals.filter((card) => card.cleanup === 'verified').length;
   const label = report.billing_status === 'settled' ? 'Vast charges' : 'Vast charges at report time';
+  const seconds = report.active_gpu_seconds;
+  const activeTime = seconds >= 60 ? `${(seconds / 60).toFixed(2)} min` : `${seconds.toFixed(3)} s`;
   byId('stats').replaceChildren(
-    detail('Active GPU time', `${(report.active_gpu_seconds / 60).toFixed(2)} min`),
+    detail('Active GPU time', activeTime),
     detail(label, total),
     detail('Rentals removed', rentals.length ? `${removed} of ${rentals.length}` : '—'),
   );
@@ -320,6 +330,9 @@ function showProvenance(repoUrl, sources) {
     detail('Patched commit', commitLabel(repoUrl, [report.head.sha])),
   ];
   if (typeof report.kernel === 'string') fields.push(detail('Kernel', report.kernel));
+  if (repoUrl && typeof report.benchmark?.id === 'string') {
+    fields.push(detail('Config', githubLink(`${repoUrl}/blob/${report.base.sha}/warpdiff.toml`, 'warpdiff.toml')));
+  }
   byId('revisions').replaceChildren(...fields);
 
   const links = new Map();
@@ -344,14 +357,23 @@ function setNotice(message, error = false) {
 
 function render(data, source, file) {
   report = validate(data);
+  const tabs = byId('benchmark-tabs');
+  const currentBenchmark = file ? null : (report.benchmark?.id || publication);
+  for (const tab of tabs.children) {
+    if (tab.dataset.benchmark === currentBenchmark) tab.setAttribute('aria-current', 'page');
+    else tab.removeAttribute('aria-current');
+  }
+  tabs.hidden = false;
   const sources = Array.isArray(report.sources) ? report.sources : [];
   const labels = [source];
   if (sources.length > 1) labels.push(`${sources.length} runs`);
   const finished = typeof report.finished_at === 'string' ? Date.parse(report.finished_at) : NaN;
   if (number(finished)) labels.push(dateFormatter.format(finished));
   byId('run-source').textContent = labels.join(' · ');
-  byId('report-title').textContent = typeof report.kernel === 'string' && report.kernel.split('/').at(-1) === 'softmax.py'
-    ? 'Softmax benchmark' : 'GPU benchmark';
+  const isSoftmax = typeof report.kernel === 'string' && report.kernel.split('/').at(-1) === 'softmax.py';
+  byId('report-title').textContent = typeof report.benchmark?.name === 'string'
+    ? report.benchmark.name : (isSoftmax ? 'Softmax benchmark' : 'GPU benchmark');
+  byId('shape-label').textContent = report.benchmark ? 'Test case' : 'Input shape';
   const result = byId('run-result');
   result.className = `status-badge ${report.status}`;
   result.textContent = report.status === 'regression' ? 'Regression found' : statuses[report.status];
@@ -362,7 +384,12 @@ function render(data, source, file) {
   const pr = byId('pr-link');
   pr.hidden = !(repoUrl && Number.isInteger(report.pull_request) && report.pull_request > 0);
   if (pr.hidden) pr.removeAttribute('href');
-  else pr.href = `${repoUrl}/pull/${report.pull_request}/checks`;
+  else {
+    const checkPrefix = `${repoUrl}/runs/`;
+    const check = report.check_url;
+    pr.href = typeof check === 'string' && check.startsWith(checkPrefix) && /^\d+$/.test(check.slice(checkPrefix.length))
+      ? check : `${repoUrl}/pull/${report.pull_request}/checks`;
+  }
 
   const cases = report.cards.flatMap((card) => card.cases || []);
   const shapes = new Map(cases.map((item) => [shapeKey(item), item]));
@@ -388,7 +415,7 @@ function render(data, source, file) {
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = file ? URL.createObjectURL(file) : null;
   const download = byId('evidence-link');
-  download.href = objectUrl || 'report.json';
+  download.href = objectUrl || publicationPath;
   download.download = file?.name || 'warpdiff-report.json';
   download.hidden = false;
   setNotice('');
@@ -417,7 +444,7 @@ fileInput.addEventListener('change', async () => {
   }
 });
 
-fetch('report.json', {cache: 'no-cache'}).then((response) => {
+fetch(publicationPath, {cache: 'no-cache'}).then((response) => {
   if (response.status === 404) return null;
   if (!response.ok) throw new Error('Report request failed');
   return response.json();
