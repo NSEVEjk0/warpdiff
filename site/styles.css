@@ -438,8 +438,8 @@ h1 span { display: block; }
   .intro { grid-template-columns: 1fr; gap: 13px; padding-block: 28px 23px; }
   .intro-context p { font-size: 14px; }
   .intro-context .button { margin-top: 10px; }
-  .benchmark-tabs { gap: 5px; padding-top: 12px; }
-  .benchmark-tabs a { flex-direction: column; padding-inline: 8px; }
+  .benchmark-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; padding-top: 12px; }
+  .benchmark-tabs a { flex-flow: column nowrap; padding-inline: 8px; }
   .report-header { align-items: start; flex-direction: column; gap: 8px; padding-block: 16px 13px; }
   .report-header h2, .method h2 { font-size: 25px; }
   .comparison { padding: 14px 13px 6px; --plot-columns: minmax(0, 1fr) auto; --plot-gap: 9px; }
