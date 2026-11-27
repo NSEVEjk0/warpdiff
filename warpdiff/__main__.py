@@ -4,7 +4,6 @@ import argparse
 import io
 import json
 import math
-import os
 import re
 import signal
 import subprocess
@@ -16,9 +15,9 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from hashlib import sha256
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
+from .benchmark import Benchmark, git_commit, gpu_names, select
 from .report import (
     SCHEMA_VERSION,
     charges_for,
@@ -27,11 +26,11 @@ from .report import (
     evaluate_card,
     exit_code,
     report_status,
+    validate_combination,
     write_json,
 )
 from .vast import APIError, IMAGE, Vast, api_key, ssh
 
-DEFAULT_GPUS = ("RTX 4090", "A100")
 GPU_MODELS = {"A100": ("A100 SXM4", "A100 PCIE")}
 REMOTE_DIR = "/workspace/warpdiff"
 
@@ -42,19 +41,22 @@ def log(message: str) -> None:
 
 
 def revision(revision_name: str, kernel: str) -> tuple[dict, bytes]:
-    commit = subprocess.check_output(
-        ["git", "rev-parse", "--verify", "--end-of-options", f"{revision_name}^{{commit}}"], text=True,
-    ).strip()
-    source = subprocess.check_output(["git", "show", f"{commit}:{kernel}"])
-    if len(source) > 250_000:
-        raise ValueError("Kernel module exceeds 250 KB")
-    compile(source, kernel, "exec")
-    return {"sha": commit, "kernel_sha256": sha256(source).hexdigest()}, source
+    commit = git_commit(revision_name)
+    benchmark = select(commit, None, kernel)
+    identity, files = benchmark.sources(commit)
+    return identity, files[benchmark.kernel]
 
 
-def make_archive(baseline: bytes, candidate: bytes) -> bytes:
+def make_archive(benchmark: Benchmark, baseline: dict[str, bytes], candidate: dict[str, bytes]) -> bytes:
     target = io.BytesIO()
-    files = {"base.py": baseline, "head.py": candidate, "worker.py": Path(__file__).with_name("worker.py").read_bytes()}
+    files = {"worker.py": Path(__file__).with_name("worker.py").read_bytes()}
+    if benchmark.job is None:
+        files.update({"base.py": baseline[benchmark.kernel], "head.py": candidate[benchmark.kernel]})
+    else:
+        files["adapter.py"] = benchmark.adapter
+        files["job.json"] = json.dumps(benchmark.job, allow_nan=False).encode()
+        for revision_name, sources in (("base", baseline), ("head", candidate)):
+            files.update({f"{revision_name}/{path}": source for path, source in sources.items()})
     with tarfile.open(fileobj=target, mode="w:gz") as bundle:
         for name, content in files.items():
             entry = tarfile.TarInfo(name)
@@ -179,10 +181,13 @@ def run_card(vast: Vast, args, gpu: str, offers: list[dict], state: Path, run_id
             ssh(instance, identity, known_hosts, ["mkdir", "-p", REMOTE_DIR], 18, cancelled)
             ssh(instance, identity, known_hosts, ["tar", "-xzf", "-", "-C", REMOTE_DIR], 30, cancelled, archive)
             command = [
-                "timeout", str(args.run_seconds), "python", "-u", f"{REMOTE_DIR}/worker.py",
-                "--base", f"{REMOTE_DIR}/base.py", "--head", f"{REMOTE_DIR}/head.py", "--pairs", str(args.pairs),
+                "timeout", str(args.run_seconds), "python", "-u", f"{REMOTE_DIR}/worker.py", "--pairs", str(args.pairs),
                 "--active-seconds", str(args.active_seconds),
             ]
+            if args.benchmark is None:
+                command.extend(["--base", f"{REMOTE_DIR}/base.py", "--head", f"{REMOTE_DIR}/head.py"])
+            else:
+                command.extend(["--manifest", f"{REMOTE_DIR}/job.json"])
             log(f"{gpu}: running paired correctness and timing checks on machine {card['machine_id']}")
             output = ssh(instance, identity, known_hosts, command, args.run_seconds + 8, cancelled).decode()
             marker = "WARPDIFF_RESULT "
@@ -231,23 +236,36 @@ def billing(vast: Vast, report: dict, wait_seconds: int) -> None:
 
 
 def compare(args) -> int:
-    gpus = args.gpu or DEFAULT_GPUS
-    kernel = PurePosixPath(args.kernel)
-    if kernel.is_absolute() or ".." in kernel.parts or kernel.suffix != ".py" or ":" in str(kernel):
-        raise ValueError("Kernel must be a repository-relative Python file")
-    if len(gpus) > 4 or len(gpus) != len(set(gpus)):
-        raise ValueError("Choose one to four distinct GPUs")
-    base, base_source = revision(args.base, str(kernel))
-    head, head_source = revision(args.head, str(kernel))
+    base_commit, head_commit = git_commit(args.base), git_commit(args.head)
+    benchmark = select(base_commit, args.benchmark, args.kernel)
+    gpus = gpu_names(args.gpu) if args.gpu else benchmark.gpus
+    if benchmark.metadata and not set(gpus).issubset(benchmark.gpus):
+        raise ValueError("--gpu must select models listed in the benchmark configuration")
+    args.margin = args.margin if args.margin is not None else benchmark.margin_pct
+    base, base_source = benchmark.sources(base_commit)
+    head, head_source = benchmark.sources(head_commit)
     if base["sha"] == head["sha"] or base_source == head_source:
-        raise ValueError("Expected a kernel change between the two Git revisions")
-    bundle = make_archive(base_source, head_source)
+        raise ValueError("Expected a change to the benchmark's source files between the two Git revisions")
+    run_id = args.run_id or uuid.uuid4().hex[:12]
+    report = {
+        "schema_version": SCHEMA_VERSION, "provenance": "vast", "run_id": run_id,
+        "started_at": datetime.now(UTC).isoformat(timespec="seconds"), "base": base, "head": head,
+        "image": IMAGE, "kernel": benchmark.kernel, "margin_pct": args.margin, "repository": args.repository,
+        "pull_request": args.pull_request, "workflow_url": args.workflow_url, "cards": [],
+    }
+    if benchmark.metadata:
+        report["benchmark"] = benchmark.metadata
+    if args.previous_report:
+        verify_saved_pair(json.loads(args.previous_report.read_text()), report)
+    if args.validate_only:
+        print(json.dumps({"base": base, "head": head, "kernel": benchmark.kernel,
+                          "benchmark": benchmark.metadata, "gpus": gpus, "margin_pct": args.margin}, indent=2))
+        return 0
+
+    bundle = make_archive(benchmark, base_source, head_source)
     vast = Vast(api_key())
     args.run_seconds = max(180, args.active_seconds + 270)
-    run_id = args.run_id or uuid.uuid4().hex[:12]
     state = args.state_dir / run_id
-    state.mkdir(parents=True, mode=0o700)
-    started_at = datetime.now(UTC).isoformat(timespec="seconds")
     cancelled = threading.Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: cancelled.set())
@@ -269,20 +287,15 @@ def compare(args) -> int:
         if not all(listings):
             missing = ", ".join(gpu for gpu, offers in zip(gpus, listings) if not offers)
             raise RuntimeError(f"No eligible offers for {missing}. No rentals started.")
+        state.mkdir(parents=True, mode=0o700)
         futures = [
             executor.submit(run_card, vast, args, gpu, offers, state / f"card-{position}.json", run_id, bundle, cancelled)
             for position, (gpu, offers) in enumerate(zip(gpus, listings), start=1)
         ]
         cards = [future.result() for future in futures]
 
-    report = {
-        "schema_version": SCHEMA_VERSION, "provenance": "vast", "run_id": run_id, "started_at": started_at,
-        "finished_at": datetime.now(UTC).isoformat(timespec="seconds"), "base": base, "head": head,
-        "image": IMAGE, "kernel": str(kernel), "margin_pct": args.margin, "repository": args.repository,
-        "pull_request": args.pull_request, "workflow_url": args.workflow_url, "cards": cards,
-        "status": report_status(cards),
-        "active_gpu_seconds": round(sum(card.get("active_gpu_seconds", 0) for card in cards), 3),
-    }
+    report.update(finished_at=datetime.now(UTC).isoformat(timespec="seconds"), cards=cards, status=report_status(cards),
+                  active_gpu_seconds=round(sum(card.get("active_gpu_seconds", 0) for card in cards), 3))
     write_json(args.output, report)
     if not cancelled.is_set():
         billing(vast, report, args.billing_wait)
@@ -292,21 +305,26 @@ def compare(args) -> int:
 
 
 def saved_baseline_digest(report: dict) -> str:
-    saved = report["base"].get("kernel_sha256")
+    saved = report["base"].get("sources_sha256") or report["base"].get("kernel_sha256")
     if saved is not None:
         return saved
     baseline, _ = revision(report["base"]["sha"], report["kernel"])
     return baseline["kernel_sha256"]
 
 
+def verify_saved_pair(earlier: dict, current: dict) -> None:
+    if saved_baseline_digest(earlier) != saved_baseline_digest(current):
+        raise ValueError("The runs used different original source files")
+    for report in (earlier, current):
+        if report["head"].get("kernel_sha256") is None:
+            report["head"], _ = revision(report["head"]["sha"], report["kernel"])
+    validate_combination(earlier, current)
+
+
 def combine_saved(args) -> int:
     earlier = json.loads(args.earlier.read_text())
     current = json.loads(args.current.read_text())
-    if saved_baseline_digest(earlier) != saved_baseline_digest(current):
-        raise ValueError("The original and retry used different baseline kernel source")
-    if earlier["head"].get("kernel_sha256") is None:
-        head, _ = revision(earlier["head"]["sha"], earlier["kernel"])
-        earlier["head"] = head
+    verify_saved_pair(earlier, current)
     combined = combine_reports(earlier, current)
     write_json(args.current, combined)
     print(check_summary(combined, combined["workflow_url"]))
@@ -357,7 +375,9 @@ def main() -> int:
     run = commands.add_parser("compare", help="Run a paired benchmark on Vast")
     run.add_argument("--base", required=True)
     run.add_argument("--head", required=True)
-    run.add_argument("--kernel", default="kernels/softmax.py")
+    selection = run.add_mutually_exclusive_group()
+    selection.add_argument("--kernel", help="Use the built-in softmax harness with this Python file")
+    selection.add_argument("--benchmark", help="Benchmark in warpdiff.toml. Pass an empty name for the repo default")
     run.add_argument("--gpu", action="append", help="Repeat to pick GPUs; default: RTX 4090 and A100")
     run.add_argument("--max-hourly", type=positive, default=1.20, help="Maximum quoted USD/hour per rental")
     run.add_argument("--max-transfer-rate", type=positive, default=0.02, help="Maximum USD/GB per direction")
@@ -365,7 +385,7 @@ def main() -> int:
     run.add_argument("--startup-seconds", type=nonnegative_integer, default=480)
     run.add_argument("--active-seconds", type=nonnegative_integer, default=0, help="Minimum active benchmark duration per GPU")
     run.add_argument("--pairs", type=nonnegative_integer, default=35)
-    run.add_argument("--margin", type=positive, default=5.0)
+    run.add_argument("--margin", type=positive, help="Override the configured slowdown cutoff in percent")
     run.add_argument("--output", type=Path, default=Path("artifacts/report.json"))
     run.add_argument("--state-dir", type=Path, default=Path(".warpdiff"))
     run.add_argument("--run-id", help="Unique run identifier used for the Vast rental labels")
@@ -373,7 +393,10 @@ def main() -> int:
     run.add_argument("--pull-request", type=int)
     run.add_argument("--workflow-url")
     run.add_argument("--billing-wait", type=nonnegative_integer, default=30)
-    run.add_argument("--dry-run", action="store_true", help="Search matching offers without renting")
+    run.add_argument("--previous-report", type=Path, help="Check that an earlier report can be combined before renting")
+    preflight = run.add_mutually_exclusive_group()
+    preflight.add_argument("--dry-run", action="store_true", help="Search matching offers without renting")
+    preflight.add_argument("--validate-only", action="store_true", help="Check the definition and Git source files without contacting Vast")
     run.set_defaults(action=compare)
     combine = commands.add_parser("combine", help="Combine two saved reports for the same kernel comparison")
     combine.add_argument("--earlier", type=Path, required=True)
@@ -393,7 +416,7 @@ def main() -> int:
         parser.error("Run identifier must be at most 32 lowercase letters, digits or hyphens")
     try:
         return args.action(args)
-    except (APIError, OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+    except (APIError, OSError, ValueError, RuntimeError, SyntaxError, subprocess.CalledProcessError) as error:
         log(str(error))
         return 3
 

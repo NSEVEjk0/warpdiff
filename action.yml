@@ -1,0 +1,207 @@
+name: WarpDiff
+description: Run a pull request benchmark on Vast.ai GPUs
+inputs:
+  pull_request:
+    description: Number of an open pull request from a branch in this repository
+    required: true
+  benchmark:
+    description: Benchmark in warpdiff.toml. An empty value uses the repo default.
+    required: false
+    default: ''
+  profile:
+    description: Use review for a short run or showcase for 31 active minutes per GPU
+    required: false
+    default: review
+  gpu:
+    description: Run on just this configured GPU model
+    required: false
+  exclude_machine:
+    description: Vast machine ID to skip
+    required: false
+  comparison_run:
+    description: Earlier workflow run ID to include in the report
+    required: false
+  max_hourly:
+    description: Maximum quoted cost in USD per rental hour
+    required: false
+    default: '0.85'
+  vast_api_key:
+    description: Scoped Vast.ai API key
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Resolve the revisions
+      id: pr
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR: ${{ inputs.pull_request }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      run: |
+        [[ "$PR" =~ ^[1-9][0-9]*$ ]]
+        [[ "$GITHUB_REF" == "refs/heads/$DEFAULT_BRANCH" && "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+        metadata=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR")
+        jq -e --arg repo "$GITHUB_REPOSITORY" --arg branch "$DEFAULT_BRANCH" \
+          '.state == "open" and .head.repo.full_name == $repo and .base.ref == $branch' <<< "$metadata" >/dev/null
+        {
+          echo "base=$GITHUB_SHA"
+          echo "head=$(jq -er .head.sha <<< "$metadata")"
+          echo "run_id=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          echo "url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Download the earlier report
+      if: inputs.comparison_run != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        COMPARISON_RUN: ${{ inputs.comparison_run }}
+      run: |
+        [[ "$COMPARISON_RUN" =~ ^[1-9][0-9]*$ ]]
+        gh run download "$COMPARISON_RUN" --name warpdiff-evidence --dir "$RUNNER_TEMP/warpdiff-earlier"
+
+    - name: Start GPU check on the candidate commit
+      id: check
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        HEAD_SHA: ${{ steps.pr.outputs.head }}
+        WORKFLOW_URL: ${{ steps.pr.outputs.url }}
+      run: |
+        check_id=$(jq -n --arg head "$HEAD_SHA" --arg url "$WORKFLOW_URL" \
+          '{name:"WarpDiff / GPU performance", head_sha:$head, details_url:$url, status:"in_progress"}' |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/check-runs" --input - --jq .id)
+        echo "id=$check_id" >> "$GITHUB_OUTPUT"
+
+    - name: Compare the two revisions on Vast
+      id: benchmark
+      shell: bash
+      env:
+        PYTHONPATH: ${{ github.action_path }}
+        VASTAI_API_KEY: ${{ inputs.vast_api_key }}
+        BASE_SHA: ${{ steps.pr.outputs.base }}
+        HEAD_SHA: ${{ steps.pr.outputs.head }}
+        WORKFLOW_URL: ${{ steps.pr.outputs.url }}
+        WARPDIFF_RUN_ID: ${{ steps.pr.outputs.run_id }}
+        PR: ${{ inputs.pull_request }}
+        BENCHMARK: ${{ inputs.benchmark }}
+        PROFILE: ${{ inputs.profile }}
+        GPU: ${{ inputs.gpu }}
+        EXCLUDE_MACHINE: ${{ inputs.exclude_machine }}
+        COMPARISON_RUN: ${{ inputs.comparison_run }}
+        MAX_HOURLY: ${{ inputs.max_hourly }}
+      run: |
+        mkdir -p artifacts
+        active=0
+        args=(--benchmark "$BENCHMARK")
+        case "$PROFILE" in
+          review) ;;
+          showcase|showcase-4090|showcase-a100) active=1860 ;;
+          *) echo "Choose review or showcase"; exit 3 ;;
+        esac
+        case "$PROFILE" in
+          showcase-4090) GPU="RTX 4090" ;;
+          showcase-a100) GPU="A100" ;;
+        esac
+        if [[ -n "$GPU" ]]; then
+          args+=(--gpu "$GPU")
+        fi
+        if [[ -n "$EXCLUDE_MACHINE" ]]; then
+          args+=(--exclude-machine "$EXCLUDE_MACHINE")
+        fi
+        if [[ -n "$COMPARISON_RUN" ]]; then
+          earlier="$RUNNER_TEMP/warpdiff-earlier/report.json"
+          if [[ -z "$BENCHMARK" ]] && jq -e '.benchmark == null' "$earlier" >/dev/null; then
+            args[0]=--kernel
+            args[1]=$(jq -er .kernel "$earlier")
+          fi
+          args+=(--previous-report "$earlier")
+        fi
+        result=0
+        python3 -P -m warpdiff compare --base "$BASE_SHA" --head "$HEAD_SHA" \
+          --run-id "$WARPDIFF_RUN_ID" --repository "$GITHUB_REPOSITORY" --pull-request "$PR" \
+          --active-seconds "$active" --workflow-url "$WORKFLOW_URL" --max-hourly "$MAX_HOURLY" --startup-seconds 300 \
+          "${args[@]}" --output artifacts/report.json > artifacts/check.md || result=$?
+        echo "exit_code=$result" >> "$GITHUB_OUTPUT"
+
+    - name: Retry cleanup after a partial run
+      if: always() && steps.pr.outputs.run_id != ''
+      shell: bash
+      env:
+        PYTHONPATH: ${{ github.action_path }}
+        VASTAI_API_KEY: ${{ inputs.vast_api_key }}
+        WARPDIFF_RUN_ID: ${{ steps.pr.outputs.run_id }}
+      run: |
+        if compgen -G ".warpdiff/$WARPDIFF_RUN_ID/card-*.json" >/dev/null; then
+          python3 -P -m warpdiff cleanup --state-dir ".warpdiff/$WARPDIFF_RUN_ID"
+        fi
+
+    - name: Combine timings from both runs
+      id: combination
+      if: always() && inputs.comparison_run != '' && hashFiles('artifacts/report.json') != ''
+      shell: bash
+      env:
+        PYTHONPATH: ${{ github.action_path }}
+      run: |
+        result=0
+        python3 -P -m warpdiff combine --earlier "$RUNNER_TEMP/warpdiff-earlier/report.json" \
+          --current artifacts/report.json > artifacts/combined-check.md || result=$?
+        [[ -s artifacts/combined-check.md ]]
+        mv artifacts/combined-check.md artifacts/check.md
+        echo "exit_code=$result" >> "$GITHUB_OUTPUT"
+
+    - name: Publish benchmark summary
+      if: always() && hashFiles('artifacts/check.md') != ''
+      shell: bash
+      run: cat artifacts/check.md >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Capture the showcase report
+      if: always() && startsWith(inputs.profile, 'showcase') && hashFiles('artifacts/report.json') != ''
+      shell: bash
+      run: python3 "$GITHUB_ACTION_PATH/scripts/capture_report.py" artifacts/report.json artifacts/warpdiff-demo.png
+
+    - name: Save report and raw timings
+      if: always() && hashFiles('artifacts/report.json') != ''
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      with:
+        name: warpdiff-evidence
+        path: |
+          artifacts/report.json
+          artifacts/check.md
+          artifacts/warpdiff-demo.png
+        retention-days: 30
+
+    - name: Complete the pull request check
+      if: always() && steps.check.outputs.id != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        CHECK_ID: ${{ steps.check.outputs.id }}
+        EXIT_CODE: ${{ steps.combination.outputs.exit_code || steps.benchmark.outputs.exit_code }}
+        COMBINATION_OUTCOME: ${{ steps.combination.outcome }}
+      run: |
+        conclusion=failure
+        title='Benchmark unavailable'
+        if [[ "$COMBINATION_OUTCOME" == failure ]]; then
+          EXIT_CODE=3
+        fi
+        case "$EXIT_CODE" in
+          0) conclusion=success; title='Benchmark passed' ;;
+          2) title='Correctness failure or GPU regression' ;;
+          3) title='Benchmark inconclusive or unavailable' ;;
+        esac
+        if [[ ! -s artifacts/check.md ]]; then
+          mkdir -p artifacts
+          printf 'Open the workflow log for the benchmark failure.\n' > artifacts/check.md
+        fi
+        jq -n --arg conclusion "$conclusion" --arg title "$title" --rawfile summary artifacts/check.md \
+          '{status:"completed", conclusion:$conclusion, output:{title:$title, summary:$summary}}' |
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/check-runs/$CHECK_ID" --input - >/dev/null
+
+    - name: Apply the benchmark result
+      if: always()
+      shell: bash
+      env:
+        EXIT_CODE: ${{ steps.combination.outputs.exit_code || steps.benchmark.outputs.exit_code }}
+      run: test "$EXIT_CODE" = 0

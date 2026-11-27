@@ -1,0 +1,25 @@
+default = "softmax"
+
+[benchmarks.softmax]
+name = "Triton softmax"
+kernel = "kernels/softmax.py"
+adapter = "benchmarks/softmax.py"
+gpus = ["RTX 4090", "A100"]
+margin_pct = 5
+cases = [
+  { id = "prefill", label = "8,192 × 1,024", shape = [8192, 1024] },
+  { id = "wide", label = "4,096 × 4,096", shape = [4096, 4096] },
+  { id = "small", label = "257 × 1,000", shape = [257, 1000] },
+]
+
+[benchmarks.rmsnorm]
+name = "Triton RMSNorm"
+kernel = "kernels/rmsnorm.py"
+adapter = "benchmarks/rmsnorm.py"
+gpus = ["RTX 3090", "RTX 4090"]
+margin_pct = 5
+cases = [
+  { id = "decode", label = "Decode · 64 × 4,096", shape = [64, 4096], epsilon = 1e-6 },
+  { id = "prefill", label = "Prefill · 2,048 × 4,096", shape = [2048, 4096], epsilon = 1e-6 },
+  { id = "wide-batch", label = "Batch · 8,192 × 1,024", shape = [8192, 1024], epsilon = 1e-6 },
+]

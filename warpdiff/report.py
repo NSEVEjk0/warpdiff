@@ -3,8 +3,11 @@
 import json
 import math
 import random
+import re
 from pathlib import Path
 from statistics import median
+
+from .benchmark import DEFAULT_GPUS
 
 SCHEMA_VERSION = 1
 MINIMUM_PAIRS = 12
@@ -76,27 +79,32 @@ def exit_code(status: str) -> int:
     return {"regression": 2, "incorrect": 2, "unavailable": 3, "inconclusive": 3}.get(status, 0)
 
 
-def combine_reports(earlier: dict, current: dict) -> dict:
+def validate_combination(earlier: dict, current: dict) -> None:
     for report in (earlier, current):
         if report.get("schema_version") != SCHEMA_VERSION or report.get("provenance") != "vast":
             raise ValueError("Combining reports requires two live Vast benchmarks with the current schema")
     if earlier["run_id"] == current["run_id"] or earlier.get("sources") or current.get("sources"):
         raise ValueError("Choose two distinct original runs")
-    for key in ("head", "kernel", "margin_pct", "image", "repository", "pull_request"):
+    for key in ("head", "kernel", "benchmark", "margin_pct", "image", "repository", "pull_request"):
         if earlier.get(key) != current.get(key):
             raise ValueError(f"Both runs must benchmark the same {key}")
     for report in (earlier, current):
         if any(card.get("cleanup") == "pending" for card in report["cards"]):
             raise ValueError("Resolve any pending rental cleanup before combining reports")
 
+
+def combine_reports(earlier: dict, current: dict) -> dict:
+    validate_combination(earlier, current)
     available = {}
     for report in (earlier, current):
         for card in report["cards"]:
             if card.get("cases") and card.get("status") != "unavailable" and card.get("cleanup") == "verified":
                 available[card["requested_gpu"]] = {**card, "source_run_id": report["run_id"]}
-    if not {"RTX 4090", "A100"} <= available.keys():
-        raise ValueError("The combined report needs measured RTX 4090 and A100 results")
-    cards = [available["RTX 4090"], available["A100"]]
+    gpus = current.get("benchmark", {}).get("gpus", DEFAULT_GPUS)
+    missing = [gpu for gpu in gpus if gpu not in available]
+    if missing:
+        raise ValueError(f"The combined report still needs results for {', '.join(missing)}")
+    cards = [available[gpu] for gpu in gpus]
     return {
         **current,
         "started_at": min(earlier["started_at"], current["started_at"]),
@@ -136,13 +144,19 @@ def write_json(path: Path, value: dict) -> None:
     temporary.replace(path)
 
 
+def markdown_text(value: str) -> str:
+    value = value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return re.sub(r"([\\`*_{}\[\]()#!|])", r"\\\1", value)
+
+
 def check_summary(report: dict, details_url: str | None = None) -> str:
     baseline = f"Original `{report['base']['sha'][:12]}`"
     if report.get("sources"):
         commits = dict.fromkeys(source["base"]["sha"] for source in report["sources"])
         baseline = "Original " + " / ".join(f"`{commit[:12]}`" for commit in commits)
+    name = report.get("benchmark", {}).get("name", "GPU performance")
     lines = [
-        "### GPU performance on Vast.ai",
+        f"### {markdown_text(name)} on Vast.ai",
         "",
         f"{baseline} · patched `{report['head']['sha'][:12]}` · "
         f"slowdown cutoff **{report['margin_pct']}%**",
@@ -159,18 +173,19 @@ def check_summary(report: dict, details_url: str | None = None) -> str:
         "within-threshold": "Within threshold",
     }
     for card in report["cards"]:
-        gpu = card.get("gpu_name") or card["requested_gpu"]
+        gpu = markdown_text(card.get("gpu_name") or card["requested_gpu"])
         if card.get("error"):
             lines.append(f"| {gpu} | — | — | — | — | Unavailable |")
             continue
         for case in card.get("cases", []):
-            input_label = f"{case['rows']:,} × {case['columns']:,}"
+            input_label = case["label"] if "label" in case else f"{case['rows']:,} × {case['columns']:,}"
+            input_label = markdown_text(input_label)
             status = format_status[case["status"]]
             if case["status"] == "incorrect":
                 lines.append(f"| {gpu} | {input_label} | — | — | — | {status} |")
             else:
                 lines.append(
-                    f"| {gpu} | {input_label} | {case['base_ms']:.3f} ms | {case['head_ms']:.3f} ms | "
+                    f"| {gpu} | {input_label} | {case['base_ms'] * 1000:.2f} µs | {case['head_ms'] * 1000:.2f} µs | "
                     f"{case['change_pct']:+.2f}% | {status} |"
                 )
     lines.extend([
@@ -178,7 +193,7 @@ def check_summary(report: dict, details_url: str | None = None) -> str:
         "", f"**{report['active_gpu_seconds'] / 60:.2f} minutes** of active GPU time.", "",
     ])
     for card in report["cards"]:
-        gpu = card.get("gpu_name") or card["requested_gpu"]
+        gpu = markdown_text(card.get("gpu_name") or card["requested_gpu"])
         charges = card.get("charges", {})
         if card.get("instance_id"):
             receipt = f"Vast reported ${charges['total_usd']:.5f} in charges" if charges.get("status") == "reported" else "Vast charges pending"
