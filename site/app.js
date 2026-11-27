@@ -12,7 +12,7 @@ const axisFormatter = new Intl.NumberFormat('en-US', {maximumSignificantDigits: 
 const dateFormatter = new Intl.DateTimeFormat('en-US', {dateStyle: 'medium', timeZone: 'UTC'});
 const shaPattern = /^[0-9a-f]{40,64}$/i;
 const caseIdPattern = /^[a-z0-9][a-z0-9-]{0,31}$/;
-const publications = {softmax: 'report.json', rmsnorm: 'rmsnorm.json'};
+const publications = {softmax: 'report.json', rmsnorm: 'rmsnorm.json', swiglu: 'swiglu.json'};
 const requestedPublication = new URLSearchParams(window.location?.search ?? '').get('benchmark');
 const publication = Object.hasOwn(publications, requestedPublication) ? requestedPublication : 'softmax';
 const publicationPath = publications[publication];
@@ -164,13 +164,14 @@ function gpuRow(card, item, limit, timeView) {
     const note = timeView
       ? `Original ${latency(item.base_ms)} · Patched ${latency(item.head_ms)}`
       : `95% interval ${item.interval_pct.map(percent).join(' to ')} · ${item.paired_samples} pairs`;
+    const correctness = item.correctness?.passed === true ? ' · Both outputs matched the reference' : '';
     measurement.append(
       timeView ? timeTrack(item, limit) : changeTrack(item, limit),
-      element('p', 'measurement-note', note),
+      element('p', 'measurement-note', note + correctness),
     );
     verdict.append(element('span', 'delta', percent(item.change_pct)));
   } else {
-    const note = status === 'incorrect' ? 'An output differed from PyTorch.' : 'No timing for this GPU.';
+    const note = status === 'incorrect' ? 'An output differed from the reference.' : 'No timing for this GPU.';
     measurement.append(element('p', 'missing', note));
   }
   verdict.append(badge(status));
@@ -329,6 +330,7 @@ function showProvenance(repoUrl, sources) {
     detail(baselines.size > 1 ? 'Original commits' : 'Original commit', commitLabel(repoUrl, [...baselines])),
     detail('Patched commit', commitLabel(repoUrl, [report.head.sha])),
   ];
+  if (repoUrl) fields.unshift(detail('Repository', githubLink(repoUrl, report.repository.split('/')[1])));
   if (typeof report.kernel === 'string') fields.push(detail('Kernel', report.kernel));
   if (repoUrl && typeof report.benchmark?.id === 'string') {
     fields.push(detail('Config', githubLink(`${repoUrl}/blob/${report.base.sha}/warpdiff.toml`, 'warpdiff.toml')));

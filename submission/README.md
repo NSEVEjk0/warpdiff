@@ -4,9 +4,11 @@
 
 [RMSNorm report](https://warpdiff.vercel.app/?benchmark=rmsnorm) · [RMSNorm check](https://github.com/NSEVEjk0/warpdiff/pull/2/checks)
 
+[SwiGLU report](https://warpdiff.vercel.app/?benchmark=swiglu) · [SwiGLU check in the example repo](https://github.com/NSEVEjk0/warpdiff-triton-example/runs/140704413666)
+
 [Demo screenshot](https://warpdiff.vercel.app/demo.png)
 
-The softmax benchmark tested commit `8a2b4c98ac54df066330360c46a2ba392ff2641c`. The RMSNorm benchmark tested `3b2835e7df8f73e9511dfe4d3f6e0cac59919769`.
+The softmax benchmark tested commit `8a2b4c98ac54df066330360c46a2ba392ff2641c`. The RMSNorm benchmark tested `3b2835e7df8f73e9511dfe4d3f6e0cac59919769`. The SwiGLU benchmark tested `8d1dfa1e0c4bacea0e11141b8e54804ba529a2dc`.
 
 ## What the runs show
 
@@ -14,7 +16,9 @@ The softmax benchmark tested commit `8a2b4c98ac54df066330360c46a2ba392ff2641c`. 
 
 **RMSNorm.** The configuration selected three cases, an RTX 3090, and an RTX 4090. Both versions matched PyTorch for all three inputs on both GPUs. Fusing the reduction and scaling lowered kernel time by **21–33%**, and the check passed. The first RTX 3090 offer expired before rental. WarpDiff reused the 4090 timings on the retry and verified the source and benchmark definition before combining the results. [Config](https://github.com/NSEVEjk0/warpdiff/blob/main/warpdiff.toml) · [Combined RMSNorm run](https://github.com/NSEVEjk0/warpdiff/actions/runs/46041898731)
 
-Both reports include the raw timings and rental charges. Vast confirmed the benchmark rentals were deleted.
+**SwiGLU.** The separate example repo installed WarpDiff v0.2.1 and supplied its own kernel, PyTorch reference, and two input sizes. Both versions matched PyTorch on an RTX 3090. Fusing the activation and multiplication lowered kernel time by **35.35%** for 65,537 elements and **39.82%** for 4,194,304 elements. [Example workflow](https://github.com/NSEVEjk0/warpdiff-triton-example/blob/main/.github/workflows/warpdiff.yml) · [Vast benchmark run](https://github.com/NSEVEjk0/warpdiff-triton-example/actions/runs/46057769048)
+
+Each report includes the raw timings and rental charges. Vast confirmed the benchmark rentals were deleted.
 
 ## Entry requirements
 
@@ -28,7 +32,7 @@ The deadline for both is Sunday, November 29, 2026 at 11:59 p.m. PST, which is M
 
 1. Open Softmax on the `8,192 × 1,024` input. Show where the patch crossed the cutoff on the RTX 4090. Open the pull request check.
 2. Switch to RMSNorm. Show the config’s GPU choices and cases, then open the passing pull request check for the fused kernel.
-3. Show where another repo can add its own benchmark and call the same action. Both reports have a JSON download with the individual timings.
+3. Open SwiGLU and follow the check to the separate repo. Show the workflow step that calls the released action and the two cases in `warpdiff.toml`. Use Download JSON to see the individual timings.
 
 Credit the tools you used. WarpDiff rented GPUs from Vast.ai, ran the Triton kernels in the PyTorch CUDA image, and checked the outputs against PyTorch.
 

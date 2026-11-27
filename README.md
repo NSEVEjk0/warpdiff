@@ -2,7 +2,7 @@
 
 WarpDiff runs a repo’s GPU benchmark on the original and patched code. It rents the GPU models you choose from Vast.ai, checks both outputs, and posts the timings under **Checks** on the pull request.
 
-[Softmax report](https://warpdiff.vercel.app/?benchmark=softmax) · [RMSNorm report](https://warpdiff.vercel.app/?benchmark=rmsnorm)
+[Softmax report](https://warpdiff.vercel.app/?benchmark=softmax) · [RMSNorm report](https://warpdiff.vercel.app/?benchmark=rmsnorm) · [SwiGLU report](https://warpdiff.vercel.app/?benchmark=swiglu)
 
 The softmax check caught a regression on the RTX 4090. The RMSNorm check measured an improvement on the RTX 3090 and RTX 4090. Both tests ran on Vast.ai. [Softmax pull request](https://github.com/NSEVEjk0/warpdiff/pull/1/checks) · [RMSNorm pull request](https://github.com/NSEVEjk0/warpdiff/pull/2/checks)
 
@@ -16,6 +16,8 @@ The softmax check caught a regression on the RTX 4090. The RMSNorm check measure
 Use the optional `gpu` and `comparison_run` inputs to retry a missing GPU and combine it with an earlier report. The runs must use the same source files, test definition, and cutoff. Use `max_hourly` to cap the quoted hourly rate for each rental.
 
 ## Use WarpDiff in another repo
+
+The example repo uses the released action to test a SwiGLU change on Vast.ai. It has a small benchmark definition, a PyTorch reference, and a real pull request with a passing check. [Example repo](https://github.com/NSEVEjk0/warpdiff-triton-example) · [Pull request](https://github.com/NSEVEjk0/warpdiff-triton-example/pull/1/checks)
 
 Add `warpdiff.toml` and a benchmark adapter to your default branch. Add the scoped secret described above, then copy the following workflow into `.github/workflows/warpdiff.yml`. The action reads the config and adapter from the checked-out default branch. Use it for pull requests from branches in your repo whose code you trust.
 
@@ -47,7 +49,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: NSEVEjk0/warpdiff@v0.2.0
+      - uses: NSEVEjk0/warpdiff@v0.2.1
         with:
           pull_request: ${{ inputs.pull_request }}
           benchmark: ${{ inputs.benchmark }}
