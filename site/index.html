@@ -3,77 +3,128 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#111517">
-  <meta name="description" content="See how long the original and patched Triton kernels take on each Vast.ai GPU.">
+  <meta name="theme-color" content="#f5f6fa">
+  <meta name="description" content="Compare Triton kernel timings on Vast.ai GPUs and review the results in a GitHub pull request.">
   <title>WarpDiff · GPU benchmarks for pull requests</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="styles.css">
   <script src="app.js" defer></script>
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to content</a>
   <header class="topbar">
-    <div class="frame nav">
+    <div class="frame topbar-inner">
       <a class="brand" href="./" aria-label="WarpDiff home"><span class="brand-mark" aria-hidden="true"></span>WarpDiff</a>
-      <nav aria-label="Report navigation">
-        <a class="nav-method" href="#method">Method</a>
-        <a class="button quiet" id="evidence-link" href="report.json" download hidden>Download JSON <span aria-hidden="true">↓</span></a>
-        <button class="button" id="open-report" type="button">Open JSON report <span aria-hidden="true">↗</span></button>
-        <input type="file" id="report-input" accept=".json,application/json" hidden>
+      <nav class="navigation" aria-label="Page navigation">
+        <a href="#report" id="benchmark-link" hidden>Benchmark</a>
+        <a href="#results" id="results-link" hidden>All results</a>
+        <a href="#method">Method</a>
       </nav>
+      <div class="topbar-actions">
+        <a class="repository-link" href="https://github.com/NSEVEjk0/warpdiff">GitHub <span aria-hidden="true">↗</span></a>
+        <button class="button" id="open-report" type="button">Import JSON</button>
+        <input type="file" id="report-input" accept=".json,application/json" hidden>
+      </div>
     </div>
   </header>
 
-  <main class="frame">
+  <main class="frame" id="main" tabindex="-1">
     <section class="intro" aria-labelledby="intro-title">
-      <h1 id="intro-title">GPU benchmarks<br><span>for pull requests</span></h1>
-      <p class="intro-copy">WarpDiff runs the original and patched Triton kernel on each Vast.ai GPU. On GitHub, open the pull request’s <strong>Checks</strong> tab to see the timings and which inputs slowed down.</p>
+      <h1 id="intro-title"><span>GPU benchmarks</span> for pull requests</h1>
+      <div class="intro-context">
+        <p>WarpDiff benchmarks the original and patched Triton kernel on Vast.ai GPUs and turns the timings into a report you can use to review the pull request on GitHub.</p>
+        <a class="button primary" id="pr-link" hidden>View GitHub check <span aria-hidden="true">↗</span></a>
+      </div>
     </section>
 
     <p id="load-status" class="notice" role="status">Loading benchmark results…</p>
+    <noscript><p class="notice">Enable JavaScript to view the charts, or <a href="report.json">download the benchmark data</a>.</p></noscript>
+
     <section class="report" id="report" aria-labelledby="report-title" hidden>
-      <div class="run-header">
+      <header class="report-header">
         <div>
-          <p id="run-source" class="eyebrow"></p>
+          <p class="run-source" id="run-source"></p>
           <h2 id="report-title">Softmax benchmark</h2>
-          <p class="revisions" id="revisions"></p>
         </div>
-        <div class="run-actions">
-          <span class="pill" id="run-result"></span>
-          <a id="pr-link" class="button quiet" target="_blank" rel="noopener noreferrer" hidden>Pull request <span aria-hidden="true">↗</span></a>
+        <div class="report-actions">
+          <span class="status-badge" id="run-result"></span>
+          <a class="button" id="evidence-link" href="report.json" download hidden>Download JSON <span aria-hidden="true">↓</span></a>
         </div>
+      </header>
+
+      <div class="report-grid">
+        <section class="panel comparison" aria-labelledby="comparison-title">
+          <div class="comparison-header">
+            <h3 id="comparison-title">GPU comparison</h3>
+            <div class="view-controls" id="view-controls" role="group" aria-label="Chart view">
+              <button type="button" data-view="change" aria-pressed="true">Change</button>
+              <button type="button" data-view="time" aria-pressed="false">Time</button>
+            </div>
+          </div>
+
+          <div class="shape-picker" id="shape-picker">
+            <span class="field-label" id="shape-label">Input shape</span>
+            <div class="shape-controls" id="shape-controls" role="group" aria-labelledby="shape-label"></div>
+          </div>
+
+          <p class="selection-summary" id="selection-summary" role="status"></p>
+
+          <figure class="plot" aria-labelledby="chart-title">
+            <figcaption class="plot-caption" id="chart-title"></figcaption>
+            <div class="plot-axis" id="chart-axis" aria-hidden="true"></div>
+            <div id="gpu-grid"></div>
+          </figure>
+        </section>
+
+        <aside class="run-panel" aria-labelledby="details-title">
+          <h3 id="details-title">Run details</h3>
+          <dl class="stats" id="stats"></dl>
+          <dl class="revisions" id="revisions"></dl>
+          <details class="environment" id="environment" hidden>
+            <summary>GPU software and charges</summary>
+            <div id="environment-list"></div>
+          </details>
+          <div class="run-links" id="run-links" hidden></div>
+        </aside>
       </div>
 
-      <div class="report-controls">
-        <div class="shape-controls" id="shape-controls" aria-label="Input shape"></div>
-        <span class="threshold" id="threshold"></span>
-      </div>
-
-      <div class="gpu-grid" id="gpu-grid" aria-live="polite"></div>
-      <div class="stats" id="stats"></div>
-
-      <div class="all-shapes">
-        <h3>All timings</h3>
-        <div class="table-wrap" tabindex="0" role="region" aria-label="Timing results table">
-          <table>
-            <thead><tr><th scope="col">GPU</th><th scope="col">Input</th><th scope="col">Original</th><th scope="col">Patched</th><th scope="col">Change</th><th scope="col">Result</th></tr></thead>
-            <tbody id="results-table"></tbody>
-          </table>
+      <section class="panel results" id="results" aria-labelledby="results-title" hidden>
+        <div class="results-heading">
+          <h3 id="results-title">All results</h3>
+          <p>Positive changes mean the patched kernel ran slower.</p>
         </div>
-      </div>
+        <table role="table">
+          <thead role="rowgroup">
+            <tr role="row">
+              <th scope="col" role="columnheader">GPU</th>
+              <th scope="col" role="columnheader">Input</th>
+              <th scope="col" role="columnheader" class="numeric">Original</th>
+              <th scope="col" role="columnheader" class="numeric">Patched</th>
+              <th scope="col" role="columnheader" class="numeric">Change</th>
+              <th scope="col" role="columnheader">Result</th>
+            </tr>
+          </thead>
+          <tbody id="results-table" role="rowgroup"></tbody>
+        </table>
+      </section>
     </section>
 
     <section class="method" id="method" aria-labelledby="method-title">
-      <div class="method-header">
-        <h2 id="method-title">How WarpDiff tests a patch</h2>
+      <div class="method-intro">
+        <h2 id="method-title">How the check works</h2>
+        <a class="text-link" href="https://github.com/NSEVEjk0/warpdiff#run-on-github">Run WarpDiff on GitHub <span aria-hidden="true">↗</span></a>
       </div>
-      <div class="method-grid">
-        <div><h3>Check the outputs</h3><p>WarpDiff compares both versions with PyTorch on each GPU before timing them.</p></div>
-        <div><h3>Time the kernels</h3><p>WarpDiff times both versions in pairs and randomizes which goes first. It flags a slowdown if the entire 95% confidence interval is above the cutoff.</p></div>
-        <div><h3>End the rentals</h3><p>After the run, WarpDiff deletes the rentals and lists the charges Vast has reported.</p></div>
-      </div>
+      <ol class="method-steps">
+        <li><h3>Check the outputs</h3><p>WarpDiff compares both versions with PyTorch on each GPU before it measures their speed.</p></li>
+        <li><h3>Time both versions</h3><p>It times the original and patched kernels in pairs and randomizes which version goes first.</p></li>
+        <li><h3>Decide whether the patch is slower</h3><p>The check flags a regression when the entire 95% confidence interval is above the cutoff. The report also shows the charges Vast posts after the rentals are deleted.</p></li>
+      </ol>
     </section>
   </main>
 
-  <footer class="frame footer"><span>WarpDiff</span><a href="https://vast.ai/showcase" rel="noopener noreferrer" target="_blank">Built on Vast.ai <span aria-hidden="true">↗</span></a></footer>
+  <footer class="frame footer">
+    <a class="brand" href="./"><span class="brand-mark" aria-hidden="true"></span>WarpDiff</a>
+    <div><a href="https://github.com/NSEVEjk0/warpdiff">Source on GitHub <span aria-hidden="true">↗</span></a><a href="https://vast.ai/showcase">Vast Showcase <span aria-hidden="true">↗</span></a></div>
+  </footer>
 </body>
 </html>
