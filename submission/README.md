@@ -2,7 +2,7 @@
 
 [Public benchmark report](https://warpdiff.vercel.app/)
 
-[Pull request and results in Checks (private)](https://github.com/NSEVEjk0/warpdiff/pull/1)
+[Pull request and benchmark results](https://github.com/NSEVEjk0/warpdiff/pull/1/checks)
 
 [Demo screenshot](https://warpdiff.vercel.app/demo.png)
 
@@ -28,7 +28,7 @@ The deadline for both is Sunday, November 29, 2026 at 11:59 p.m. PST, which is M
 
 1. Open the report on the `8,192 × 1,024` input. Show the original and patched timings and where the 4090 slowed down beyond the cutoff.
 2. Switch to `257 × 1,000` to show a slowdown on both cards. Point out the GPU time and the charges at the bottom of the report.
-3. If your audience has access to the repository, open the pull request’s **Checks** tab. Anyone can download the timings from the public report.
+3. Open the pull request’s **Checks** tab to show the benchmark result. The report also has a JSON download with the individual timings.
 
 Credit the tools you used. WarpDiff rented the GPUs from Vast.ai, ran a Triton softmax kernel in the PyTorch CUDA image, and checked the outputs against PyTorch. The JSON download has the individual timings, software versions, and Vast charges.
 
